@@ -1,0 +1,10 @@
+frontend/node_modules/
+frontend/dist/
+
+backend/.gocache/
+backend/*.log
+backend/*.out
+backend/*.err
+
+.DS_Store
+Thumbs.db
