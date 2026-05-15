@@ -34,7 +34,8 @@ func (a *App) Run() error {
 	repo := mysqlrepo.NewInterviewRepository(db)
 	providerFactory := service.NewProviderFactory(a.config)
 	svc := service.NewInterviewService(repo, providerFactory)
-	apiHandler := handler.NewAPIHandler(svc)
+	resumeParser := service.NewResumeParser(a.config.Runtime.PythonPath)
+	apiHandler := handler.NewAPIHandler(svc, resumeParser)
 
 	server := &http.Server{
 		Addr:              fmt.Sprintf(":%d", a.config.Server.Port),

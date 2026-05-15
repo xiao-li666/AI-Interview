@@ -64,9 +64,15 @@ func (p *Provider) Name() string {
 }
 
 func (p *Provider) GenerateQuestions(ctx context.Context, input ai.GenerateQuestionsInput) ([]model.InterviewQuestion, error) {
-	systemPrompt := `你是一名中文技术面试官。请根据岗位、轮次、难度和风格，输出一组高质量中文面试题。
+	systemPrompt := `你是一名中文技术面试官。请根据岗位信息、面试轮次、候选人简历、目标公司近几年面试偏好来生成高质量中文面试题。
+你要同时满足这些要求：
+1. 问题必须贴合岗位、级别、面试类型、难度和面试官风格。
+2. 要结合候选人简历里的项目、技术栈、经历深挖追问，而不是只出通用题。
+3. 要参考目标公司近几年常见出题方向，让题目风格更像该公司的真实面试。
+4. 题目之间要有层次，从基础认知到项目深挖，再到系统设计或开放题。
+5. 所有输出必须是简体中文。
 
-你必须返回 JSON，格式如下：
+你必须只返回 JSON，格式如下：
 {
   "questions": [
     {
@@ -79,9 +85,9 @@ func (p *Provider) GenerateQuestions(ctx context.Context, input ai.GenerateQuest
 }
 
 要求：
-1. questions 数量等于 questionCount。
-2. 只能返回 JSON，不要返回解释。
-3. expectedPoints 必须是中文短语数组。`
+1. questions 数量必须等于 questionCount。
+2. expectedPoints 必须是精简中文短语数组。
+3. 不要输出 Markdown，不要解释。`
 
 	var payload struct {
 		Questions []struct {
@@ -115,8 +121,7 @@ func (p *Provider) GenerateQuestions(ctx context.Context, input ai.GenerateQuest
 
 func (p *Provider) EvaluateAnswer(ctx context.Context, input ai.EvaluateAnswerInput) (model.AnswerFeedback, error) {
 	systemPrompt := `你是一名严谨但友好的中文技术面试官。请根据题目、考察维度、回答内容和上下文输出结构化评分与点评。
-
-你必须返回 JSON，格式如下：
+你必须只返回 JSON，格式如下：
 {
   "overallScore": 0,
   "accuracyScore": 0,
@@ -132,7 +137,7 @@ func (p *Provider) EvaluateAnswer(ctx context.Context, input ai.EvaluateAnswerIn
 要求：
 1. 所有分数范围 0 到 100。
 2. 所有评价都必须是简体中文。
-3. 只能返回 JSON，不要返回解释。`
+3. 只返回 JSON，不要解释。`
 
 	var payload struct {
 		OverallScore          float64 `json:"overallScore"`
@@ -166,8 +171,7 @@ func (p *Provider) EvaluateAnswer(ctx context.Context, input ai.EvaluateAnswerIn
 
 func (p *Provider) GenerateReport(ctx context.Context, input ai.GenerateReportInput) (model.InterviewReport, error) {
 	systemPrompt := `你是一名中文技术面试复盘教练。请基于整场问答历史、逐题评分和题目内容生成结构化复盘报告。
-
-你必须返回 JSON，格式如下：
+你必须只返回 JSON，格式如下：
 {
   "overallScore": 0,
   "performanceSummary": "中文",
@@ -190,7 +194,7 @@ func (p *Provider) GenerateReport(ctx context.Context, input ai.GenerateReportIn
 要求：
 1. 所有分数范围 0 到 100。
 2. 所有输出都必须是简体中文。
-3. 只能返回 JSON，不要返回解释。`
+3. 只返回 JSON，不要解释。`
 
 	var payload struct {
 		OverallScore       float64                      `json:"overallScore"`
@@ -219,6 +223,65 @@ func (p *Provider) GenerateReport(ctx context.Context, input ai.GenerateReportIn
 	}, nil
 }
 
+func (p *Provider) GenerateQuestionReviews(ctx context.Context, input ai.GenerateQuestionReviewsInput) ([]model.QuestionReviewItem, error) {
+	systemPrompt := `你是一名中文技术面试复盘教练。请根据每道题的题型、题目、考察点、用户回答和反馈，生成精简的题目解析。
+你必须只返回 JSON，格式如下：
+{
+  "items": [
+    {
+      "questionId": 0,
+      "reviewType": "correct_answer|methodology",
+      "title": "正确答案或回答方向",
+      "content": "简体中文，不超过120字"
+    }
+  ]
+}
+
+要求：
+1. 知识点题输出 reviewType=correct_answer，并给出精简正确答案。
+2. 主观题、开放题输出 reviewType=methodology，并给出回答方法论或回答方向。
+3. 只返回 JSON。`
+
+	var payload struct {
+		Items []struct {
+			QuestionID int64  `json:"questionId"`
+			ReviewType string `json:"reviewType"`
+			Title      string `json:"title"`
+			Content    string `json:"content"`
+		} `json:"items"`
+	}
+	if err := p.requestJSON(ctx, systemPrompt, input, &payload); err != nil {
+		return nil, err
+	}
+
+	answerMap := make(map[int64]model.SessionAnswerItem, len(input.AnswerHistory))
+	for _, item := range input.AnswerHistory {
+		answerMap[item.QuestionID] = item
+	}
+
+	reviews := make([]model.QuestionReviewItem, 0, len(payload.Items))
+	for _, item := range payload.Items {
+		answerItem, ok := answerMap[item.QuestionID]
+		if !ok {
+			continue
+		}
+
+		reviews = append(reviews, model.QuestionReviewItem{
+			QuestionID:          answerItem.QuestionID,
+			QuestionNo:          answerItem.QuestionNo,
+			QuestionType:        answerItem.QuestionType,
+			AssessmentDimension: answerItem.AssessmentDimension,
+			Prompt:              answerItem.Prompt,
+			ExpectedPoints:      answerItem.ExpectedPoints,
+			ReviewType:          strings.TrimSpace(item.ReviewType),
+			Title:               strings.TrimSpace(item.Title),
+			Content:             strings.TrimSpace(item.Content),
+		})
+	}
+
+	return reviews, nil
+}
+
 func (p *Provider) requestJSON(ctx context.Context, systemPrompt string, input any, out any) error {
 	inputJSON, err := json.MarshalIndent(input, "", "  ")
 	if err != nil {
@@ -234,7 +297,7 @@ func (p *Provider) requestJSON(ctx context.Context, systemPrompt string, input a
 			},
 			{
 				"role":    "user",
-				"content": "请根据下面的 JSON 上下文完成任务，并返回合法 json：\n\n" + string(inputJSON),
+				"content": "请根据下面的 JSON 上下文完成任务，并返回合法 JSON：\n\n" + string(inputJSON),
 			},
 		},
 		"response_format": map[string]any{

@@ -12,10 +12,18 @@ type Provider interface {
 	GenerateQuestions(ctx context.Context, input GenerateQuestionsInput) ([]model.InterviewQuestion, error)
 	EvaluateAnswer(ctx context.Context, input EvaluateAnswerInput) (model.AnswerFeedback, error)
 	GenerateReport(ctx context.Context, input GenerateReportInput) (model.InterviewReport, error)
+	GenerateQuestionReviews(ctx context.Context, input GenerateQuestionReviewsInput) ([]model.QuestionReviewItem, error)
 }
 
 type GenerateQuestionsInput struct {
 	JobTitle         string `json:"jobTitle"`
+	JobCategory      string `json:"jobCategory"`
+	LevelCode        string `json:"levelCode"`
+	InterviewType    string `json:"interviewType"`
+	CompanyName      string `json:"companyName"`
+	ResumeFileName   string `json:"resumeFileName"`
+	ResumeText       string `json:"resumeText"`
+	CompanyQuestionBank string `json:"companyQuestionBank"`
 	RoundType        string `json:"roundType"`
 	InterviewMode    string `json:"interviewMode"`
 	DifficultyLevel  string `json:"difficultyLevel"`
@@ -31,6 +39,12 @@ type EvaluateAnswerInput struct {
 }
 
 type GenerateReportInput struct {
+	Session       model.InterviewSession    `json:"session"`
+	Questions     []model.InterviewQuestion `json:"questions"`
+	AnswerHistory []model.SessionAnswerItem `json:"answerHistory"`
+}
+
+type GenerateQuestionReviewsInput struct {
 	Session       model.InterviewSession    `json:"session"`
 	Questions     []model.InterviewQuestion `json:"questions"`
 	AnswerHistory []model.SessionAnswerItem `json:"answerHistory"`
@@ -106,4 +120,18 @@ func (p *FallbackProvider) GenerateReport(ctx context.Context, input GenerateRep
 	}
 
 	return fallbackReport, nil
+}
+
+func (p *FallbackProvider) GenerateQuestionReviews(ctx context.Context, input GenerateQuestionReviewsInput) ([]model.QuestionReviewItem, error) {
+	items, err := p.primary.GenerateQuestionReviews(ctx, input)
+	if err == nil {
+		return items, nil
+	}
+
+	fallbackItems, fallbackErr := p.fallback.GenerateQuestionReviews(ctx, input)
+	if fallbackErr != nil {
+		return nil, fmt.Errorf("primary provider failed: %v; fallback provider failed: %w", err, fallbackErr)
+	}
+
+	return fallbackItems, nil
 }

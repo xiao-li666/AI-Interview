@@ -6,9 +6,7 @@ export const navItems = [
   { label: "历史记录", to: "/history" }
 ];
 
-export const interviewModeOptions = [
-  { label: "文字面试", value: "text" }
-];
+export const interviewModeOptions = [{ label: "文字面试", value: "text" }];
 
 export const interviewerStyleOptions = [
   { label: "均衡型", value: "balanced" },
@@ -29,6 +27,19 @@ export const roundTypeOptions = [
   { label: "行为面试", value: "behavior" }
 ];
 
+export const companyOptions = [
+  "阿里巴巴",
+  "腾讯",
+  "字节跳动",
+  "百度",
+  "美团",
+  "京东",
+  "拼多多",
+  "快手",
+  "小米",
+  "网易"
+];
+
 export const setupDefaults = {
   userId: 1,
   jobTitle: "Go 后端工程师",
@@ -40,7 +51,10 @@ export const setupDefaults = {
   questionCount: 3,
   interviewerStyle: "balanced",
   sessionName: "Go 后端模拟面试",
-  roundType: "technical_1"
+  roundType: "technical_1",
+  companyName: "阿里巴巴",
+  resumeText: "",
+  resumeFileName: ""
 };
 
 export const scoreWeights = [
@@ -67,7 +81,7 @@ const questionTypeLabelMap = {
   self_intro: "自我介绍",
   project: "项目题",
   system_design: "系统设计",
-  go_runtime: "Go 运行时",
+  go_runtime: "Go 基础",
   behavior: "行为面试"
 };
 

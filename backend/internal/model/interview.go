@@ -19,8 +19,16 @@ type InterviewPlan struct {
 type InterviewSession struct {
 	ID                int64      `json:"id"`
 	UserID            int64      `json:"userId"`
+	CandidateProfileID int64     `json:"candidateProfileId"`
 	JobTargetID       int64      `json:"jobTargetId"`
+	ResumeID          int64      `json:"resumeId"`
 	JobTitle          string     `json:"jobTitle"`
+	JobCategory       string     `json:"jobCategory"`
+	LevelCode         string     `json:"levelCode"`
+	InterviewType     string     `json:"interviewType"`
+	CompanyName       string     `json:"companyName"`
+	ResumeFileName    string     `json:"resumeFileName"`
+	ResumeText        string     `json:"resumeText"`
 	SessionName       string     `json:"sessionName"`
 	RoundType         string     `json:"roundType"`
 	InterviewMode     string     `json:"interviewMode"`
@@ -84,6 +92,18 @@ type SessionAnswerItem struct {
 	ExpectedPoints      []string        `json:"expectedPoints"`
 	Answer              InterviewAnswer `json:"answer"`
 	Feedback            *AnswerFeedback `json:"feedback,omitempty"`
+}
+
+type QuestionReviewItem struct {
+	QuestionID          int64    `json:"questionId"`
+	QuestionNo          int      `json:"questionNo"`
+	QuestionType        string   `json:"questionType"`
+	AssessmentDimension string   `json:"assessmentDimension"`
+	Prompt              string   `json:"prompt"`
+	ExpectedPoints      []string `json:"expectedPoints"`
+	ReviewType          string   `json:"reviewType"`
+	Title               string   `json:"title"`
+	Content             string   `json:"content"`
 }
 
 type ReportDimensionScore struct {

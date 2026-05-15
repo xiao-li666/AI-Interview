@@ -10,6 +10,7 @@ type Config struct {
 	MySQL    MySQLConfig
 	DeepSeek DeepSeekConfig
 	OpenAI   OpenAIConfig
+	Runtime  RuntimeConfig
 }
 
 type ServerConfig struct {
@@ -37,6 +38,10 @@ type DeepSeekConfig struct {
 	Model   string
 }
 
+type RuntimeConfig struct {
+	PythonPath string
+}
+
 func Load() Config {
 	return Config{
 		Server: ServerConfig{
@@ -59,6 +64,12 @@ func Load() Config {
 			APIKey:  stringFromEnv("OPENAI_API_KEY", ""),
 			BaseURL: stringFromEnv("OPENAI_BASE_URL", ""),
 			Model:   stringFromEnv("OPENAI_MODEL", "gpt-5.5"),
+		},
+		Runtime: RuntimeConfig{
+			PythonPath: stringFromEnv(
+				"PYTHON_RUNTIME_PATH",
+				`C:\Users\xiaoli\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe`,
+			),
 		},
 	}
 }

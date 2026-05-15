@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,11 +13,15 @@ import (
 )
 
 type APIHandler struct {
-	service *service.InterviewService
+	service      *service.InterviewService
+	resumeParser *service.ResumeParser
 }
 
-func NewAPIHandler(service *service.InterviewService) *APIHandler {
-	return &APIHandler{service: service}
+func NewAPIHandler(service *service.InterviewService, resumeParser *service.ResumeParser) *APIHandler {
+	return &APIHandler{
+		service:      service,
+		resumeParser: resumeParser,
+	}
 }
 
 func (h *APIHandler) Routes() http.Handler {
@@ -30,6 +35,7 @@ func (h *APIHandler) Routes() http.Handler {
 	mux.HandleFunc("/api/v1/history", h.handleHistory)
 	mux.HandleFunc("/api/v1/ai-config", h.handleAIConfig)
 	mux.HandleFunc("/api/v1/ai-config/test", h.handleAIConfigTest)
+	mux.HandleFunc("/api/v1/resume/parse", h.handleResumeParse)
 
 	return withMiddleware(mux)
 }
@@ -116,6 +122,17 @@ func (h *APIHandler) handleInterviewSessionActions(w http.ResponseWriter, r *htt
 
 	if len(parts) == 2 && parts[1] == "answers" && r.Method == http.MethodGet {
 		items, getErr := h.service.GetSessionAnswers(r.Context(), sessionID)
+		if getErr != nil {
+			handleServiceError(w, getErr)
+			return
+		}
+
+		response.JSON(w, http.StatusOK, items)
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "question-reviews" && r.Method == http.MethodGet {
+		items, getErr := h.service.GetQuestionReviews(r.Context(), sessionID)
 		if getErr != nil {
 			handleServiceError(w, getErr)
 			return
@@ -257,6 +274,44 @@ func (h *APIHandler) handleAIConfigTest(w http.ResponseWriter, r *http.Request) 
 	result, testErr := h.service.TestUserAIConfig(r.Context(), req)
 	if testErr != nil {
 		handleServiceError(w, testErr)
+		return
+	}
+
+	response.JSON(w, http.StatusOK, result)
+}
+
+func (h *APIHandler) handleResumeParse(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.MethodNotAllowed(w)
+		return
+	}
+
+	if h.resumeParser == nil {
+		response.BadRequest(w, "resume parser is not available")
+		return
+	}
+
+	if err := r.ParseMultipartForm(16 << 20); err != nil {
+		response.BadRequest(w, "invalid multipart form")
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		response.BadRequest(w, "resume file is required")
+		return
+	}
+	defer file.Close()
+
+	fileBytes, err := io.ReadAll(file)
+	if err != nil {
+		response.BadRequest(w, "failed to read resume file")
+		return
+	}
+
+	result, err := h.resumeParser.Parse(r.Context(), header.Filename, fileBytes)
+	if err != nil {
+		response.BadRequest(w, err.Error())
 		return
 	}
 

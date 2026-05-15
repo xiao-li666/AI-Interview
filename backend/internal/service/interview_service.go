@@ -24,6 +24,9 @@ type CreatePlanRequest struct {
 	JobCategory      string `json:"jobCategory"`
 	LevelCode        string `json:"levelCode"`
 	InterviewType    string `json:"interviewType"`
+	CompanyName      string `json:"companyName"`
+	ResumeFileName   string `json:"resumeFileName"`
+	ResumeText       string `json:"resumeText"`
 	InterviewMode    string `json:"interviewMode"`
 	DifficultyLevel  string `json:"difficultyLevel"`
 	QuestionCount    int    `json:"questionCount"`
@@ -34,6 +37,12 @@ type CreateSessionRequest struct {
 	UserID           int64  `json:"userId"`
 	JobTargetID      int64  `json:"jobTargetId"`
 	JobTitle         string `json:"jobTitle"`
+	JobCategory      string `json:"jobCategory"`
+	LevelCode        string `json:"levelCode"`
+	InterviewType    string `json:"interviewType"`
+	CompanyName      string `json:"companyName"`
+	ResumeFileName   string `json:"resumeFileName"`
+	ResumeText       string `json:"resumeText"`
 	SessionName      string `json:"sessionName"`
 	RoundType        string `json:"roundType"`
 	InterviewMode    string `json:"interviewMode"`
@@ -68,7 +77,7 @@ func (s *InterviewService) CreatePlan(ctx context.Context, req CreatePlanRequest
 
 	plan := model.InterviewPlan{
 		UserID:           req.UserID,
-		JobTitle:         req.JobTitle,
+		JobTitle:         strings.TrimSpace(req.JobTitle),
 		JobCategory:      defaultString(req.JobCategory, "backend"),
 		LevelCode:        defaultString(req.LevelCode, "mid"),
 		InterviewType:    defaultString(req.InterviewType, "technical_1"),
@@ -95,8 +104,14 @@ func (s *InterviewService) CreateSession(ctx context.Context, req CreateSessionR
 	session := model.InterviewSession{
 		UserID:            req.UserID,
 		JobTargetID:       req.JobTargetID,
-		JobTitle:          defaultString(req.JobTitle, "未命名岗位"),
-		SessionName:       req.SessionName,
+		JobTitle:          defaultString(strings.TrimSpace(req.JobTitle), "未命名岗位"),
+		JobCategory:       defaultString(req.JobCategory, "backend"),
+		LevelCode:         defaultString(req.LevelCode, "mid"),
+		InterviewType:     defaultString(req.InterviewType, "technical_1"),
+		CompanyName:       strings.TrimSpace(req.CompanyName),
+		ResumeFileName:    strings.TrimSpace(req.ResumeFileName),
+		ResumeText:        strings.TrimSpace(req.ResumeText),
+		SessionName:       strings.TrimSpace(req.SessionName),
 		RoundType:         defaultString(req.RoundType, "technical_1"),
 		InterviewMode:     defaultString(req.InterviewMode, "text"),
 		InterviewerStyle:  defaultString(req.InterviewerStyle, "balanced"),
@@ -114,12 +129,19 @@ func (s *InterviewService) CreateSession(ctx context.Context, req CreateSessionR
 	}
 
 	questions, err := provider.GenerateQuestions(ctx, ai.GenerateQuestionsInput{
-		JobTitle:         session.JobTitle,
-		RoundType:        session.RoundType,
-		InterviewMode:    session.InterviewMode,
-		DifficultyLevel:  session.DifficultyLevel,
-		InterviewerStyle: session.InterviewerStyle,
-		QuestionCount:    session.QuestionCount,
+		JobTitle:            session.JobTitle,
+		JobCategory:         session.JobCategory,
+		LevelCode:           session.LevelCode,
+		InterviewType:       session.InterviewType,
+		CompanyName:         session.CompanyName,
+		ResumeFileName:      session.ResumeFileName,
+		ResumeText:          session.ResumeText,
+		CompanyQuestionBank: BuildCompanyQuestionBank(session.CompanyName),
+		RoundType:           session.RoundType,
+		InterviewMode:       session.InterviewMode,
+		DifficultyLevel:     session.DifficultyLevel,
+		InterviewerStyle:    session.InterviewerStyle,
+		QuestionCount:       session.QuestionCount,
 	})
 	if err != nil {
 		return model.SessionDetail{}, err
@@ -261,6 +283,46 @@ func (s *InterviewService) GetSessionAnswers(ctx context.Context, sessionID int6
 	return items, nil
 }
 
+func (s *InterviewService) GetQuestionReviews(ctx context.Context, sessionID int64) ([]model.QuestionReviewItem, error) {
+	if sessionID == 0 {
+		return nil, errors.New("sessionId is required")
+	}
+
+	detail, err := s.repo.GetSession(ctx, sessionID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrNotFound
+		}
+
+		return nil, err
+	}
+
+	answerHistory, err := s.repo.ListSessionAnswers(ctx, sessionID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrNotFound
+		}
+
+		return nil, err
+	}
+
+	provider, err := s.resolveProviderForUser(ctx, detail.Session.UserID)
+	if err != nil {
+		return nil, err
+	}
+
+	items, err := provider.GenerateQuestionReviews(ctx, ai.GenerateQuestionReviewsInput{
+		Session:       detail.Session,
+		Questions:     detail.Questions,
+		AnswerHistory: answerHistory,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return items, nil
+}
+
 func (s *InterviewService) GetReport(ctx context.Context, sessionID int64) (model.InterviewReport, error) {
 	report, err := s.repo.GetReport(ctx, sessionID)
 	if err != nil {
@@ -308,7 +370,7 @@ func defaultString(value string, fallback string) string {
 		return fallback
 	}
 
-	return value
+	return strings.TrimSpace(value)
 }
 
 func findQuestion(items []model.InterviewQuestion, questionID int64) (model.InterviewQuestion, bool) {

@@ -3,6 +3,7 @@ package mock
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"ai-interview/backend/internal/ai"
@@ -131,6 +132,34 @@ func (p *Provider) GenerateReport(_ context.Context, input ai.GenerateReportInpu
 	}, nil
 }
 
+func (p *Provider) GenerateQuestionReviews(_ context.Context, input ai.GenerateQuestionReviewsInput) ([]model.QuestionReviewItem, error) {
+	items := make([]model.QuestionReviewItem, 0, len(input.AnswerHistory))
+	for _, item := range input.AnswerHistory {
+		reviewType := "methodology"
+		title := "回答方向"
+		content := buildMockMethodology(item)
+		if isKnowledgeQuestionType(item.QuestionType) {
+			reviewType = "correct_answer"
+			title = "正确答案"
+			content = buildMockKnowledgeAnswer(item)
+		}
+
+		items = append(items, model.QuestionReviewItem{
+			QuestionID:          item.QuestionID,
+			QuestionNo:          item.QuestionNo,
+			QuestionType:        item.QuestionType,
+			AssessmentDimension: item.AssessmentDimension,
+			Prompt:              item.Prompt,
+			ExpectedPoints:      item.ExpectedPoints,
+			ReviewType:          reviewType,
+			Title:               title,
+			Content:             content,
+		})
+	}
+
+	return items, nil
+}
+
 func aggregateScores(items []model.SessionAnswerItem) (float64, float64, float64, float64, float64) {
 	if len(items) == 0 {
 		return 0, 0, 0, 0, 0
@@ -170,4 +199,54 @@ func truncate(text string, size int) string {
 	}
 
 	return string(runes[:size]) + "..."
+}
+
+func isKnowledgeQuestionType(questionType string) bool {
+	return questionType == "go_runtime" || questionType == "system_design"
+}
+
+func buildMockKnowledgeAnswer(item model.SessionAnswerItem) string {
+	if strings.Contains(item.Prompt, "切片") {
+		return "Go 切片是对底层数组的描述符，包含指针、长度和容量。扩容时小容量通常倍增，容量变大后增长比例会下降；扩容可能触发底层数组拷贝。"
+	}
+
+	if strings.Contains(item.Prompt, "goroutine") || strings.Contains(item.Prompt, "泄漏") {
+		return "goroutine 泄漏常见于阻塞发送、阻塞接收、未退出循环或 context 未取消。排查时常看 pprof、goroutine 数量和阻塞栈，再用超时、取消和资源关闭治理。"
+	}
+
+	if strings.Contains(item.Prompt, "高并发") || strings.Contains(item.Prompt, "库存") {
+		return "高并发题通常先稳流量，再保数据正确。入口限流削峰，中间异步化平滑请求，库存扣减用原子操作或条件更新，再用幂等、补偿和最终一致性兜底。"
+	}
+
+	if len(item.ExpectedPoints) > 0 {
+		return "这题的核心答案应覆盖：" + strings.Join(limitStrings(item.ExpectedPoints, 3), "、") + "。"
+	}
+
+	return "这类知识点题建议先给结论，再补关键原理、场景和边界条件。"
+}
+
+func buildMockMethodology(item model.SessionAnswerItem) string {
+	switch item.QuestionType {
+	case "behavior":
+		return "这类题建议按 STAR 来答：背景、任务、行动、结果，每段一到两句即可。"
+	case "project":
+		return "建议按“项目背景-你的职责-关键决策-结果复盘”来讲，重点突出你的判断和取舍。"
+	default:
+		return "这类开放题建议先给结论，再拆 2 到 3 个关键点展开，最后补结果或复盘。"
+	}
+}
+
+func limitStrings(items []string, limit int) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		out = append(out, item)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out
 }

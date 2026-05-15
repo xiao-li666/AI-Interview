@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"ai-interview/backend/internal/model"
@@ -62,13 +63,24 @@ func (r *InterviewRepository) CreateSession(ctx context.Context, session model.I
 	defer rollback(tx)
 
 	now := time.Now()
+	resumeID, err := r.upsertResumeTx(ctx, tx, session, now)
+	if err != nil {
+		return model.SessionDetail{}, err
+	}
+
+	jobTargetID, err := r.createJobTargetTx(ctx, tx, session, resumeID, now)
+	if err != nil {
+		return model.SessionDetail{}, err
+	}
+
 	result, err := tx.ExecContext(
 		ctx,
 		`INSERT INTO interview_sessions
-		(user_id, job_target_id, job_title, session_name, round_type, interview_mode, interviewer_style, difficulty_level, question_count, current_question_no, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(user_id, job_target_id, resume_id, job_title, session_name, round_type, interview_mode, interviewer_style, difficulty_level, question_count, current_question_no, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		session.UserID,
-		nullInt64(session.JobTargetID),
+		nullInt64(jobTargetID),
+		nullInt64(resumeID),
 		session.JobTitle,
 		session.SessionName,
 		session.RoundType,
@@ -138,6 +150,8 @@ func (r *InterviewRepository) CreateSession(ctx context.Context, session model.I
 	}
 
 	session.ID = sessionID
+	session.JobTargetID = jobTargetID
+	session.ResumeID = resumeID
 	session.CreatedAt = now
 	session.UpdatedAt = now
 
@@ -776,24 +790,63 @@ func (r *InterviewRepository) UpsertUserAIConfig(ctx context.Context, cfg model.
 
 func (r *InterviewRepository) loadSession(ctx context.Context, sessionID int64) (model.InterviewSession, error) {
 	var (
-		session     model.InterviewSession
-		jobTargetID sql.NullInt64
-		startedAt   sql.NullTime
-		endedAt     sql.NullTime
+		session            model.InterviewSession
+		candidateProfileID sql.NullInt64
+		jobTargetID        sql.NullInt64
+		resumeID           sql.NullInt64
+		companyName        sql.NullString
+		resumeFileName     sql.NullString
+		resumeText         sql.NullString
+		startedAt          sql.NullTime
+		endedAt            sql.NullTime
 	)
 
 	row := r.db.QueryRowContext(
 		ctx,
-		`SELECT id, user_id, job_target_id, job_title, session_name, round_type, interview_mode, interviewer_style, difficulty_level, question_count, current_question_no, status, started_at, ended_at, created_at, updated_at
-		FROM interview_sessions
-		WHERE id = ?`,
+		`SELECT
+			s.id,
+			s.user_id,
+			s.candidate_profile_id,
+			s.job_target_id,
+			s.resume_id,
+			s.job_title,
+			COALESCE(jt.job_category, ''),
+			COALESCE(jt.level_code, ''),
+			COALESCE(jt.interview_type, ''),
+			COALESCE(jt.company_name, ''),
+			COALESCE(r.name, ''),
+			COALESCE(r.raw_text, ''),
+			s.session_name,
+			s.round_type,
+			s.interview_mode,
+			s.interviewer_style,
+			s.difficulty_level,
+			s.question_count,
+			s.current_question_no,
+			s.status,
+			s.started_at,
+			s.ended_at,
+			s.created_at,
+			s.updated_at
+		FROM interview_sessions s
+		LEFT JOIN job_targets jt ON jt.id = s.job_target_id
+		LEFT JOIN resumes r ON r.id = s.resume_id
+		WHERE s.id = ?`,
 		sessionID,
 	)
 	if err := row.Scan(
 		&session.ID,
 		&session.UserID,
+		&candidateProfileID,
 		&jobTargetID,
+		&resumeID,
 		&session.JobTitle,
+		&session.JobCategory,
+		&session.LevelCode,
+		&session.InterviewType,
+		&companyName,
+		&resumeFileName,
+		&resumeText,
 		&session.SessionName,
 		&session.RoundType,
 		&session.InterviewMode,
@@ -814,9 +867,18 @@ func (r *InterviewRepository) loadSession(ctx context.Context, sessionID int64) 
 		return model.InterviewSession{}, fmt.Errorf("load interview session: %w", err)
 	}
 
+	if candidateProfileID.Valid {
+		session.CandidateProfileID = candidateProfileID.Int64
+	}
 	if jobTargetID.Valid {
 		session.JobTargetID = jobTargetID.Int64
 	}
+	if resumeID.Valid {
+		session.ResumeID = resumeID.Int64
+	}
+	session.CompanyName = companyName.String
+	session.ResumeFileName = resumeFileName.String
+	session.ResumeText = resumeText.String
 	if startedAt.Valid {
 		session.StartedAt = &startedAt.Time
 	}
@@ -825,6 +887,69 @@ func (r *InterviewRepository) loadSession(ctx context.Context, sessionID int64) 
 	}
 
 	return session, nil
+}
+
+func (r *InterviewRepository) upsertResumeTx(ctx context.Context, tx *sql.Tx, session model.InterviewSession, now time.Time) (int64, error) {
+	if session.UserID == 0 || strings.TrimSpace(session.ResumeText) == "" {
+		return 0, nil
+	}
+
+	resumeName := strings.TrimSpace(session.ResumeFileName)
+	if resumeName == "" {
+		resumeName = session.JobTitle + " 简历"
+	}
+
+	result, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO resumes
+		(user_id, name, source_type, raw_text, is_default, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		session.UserID,
+		resumeName,
+		"manual",
+		session.ResumeText,
+		0,
+		now,
+		now,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("insert resume: %w", err)
+	}
+
+	resumeID, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("read resume id: %w", err)
+	}
+
+	return resumeID, nil
+}
+
+func (r *InterviewRepository) createJobTargetTx(ctx context.Context, tx *sql.Tx, session model.InterviewSession, resumeID int64, now time.Time) (int64, error) {
+	result, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO job_targets
+		(user_id, resume_id, company_name, job_title, job_category, level_code, interview_type, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		session.UserID,
+		nullInt64(resumeID),
+		nullString(session.CompanyName),
+		session.JobTitle,
+		defaultString(session.JobCategory, "backend"),
+		defaultString(session.LevelCode, "mid"),
+		defaultString(session.InterviewType, "technical_1"),
+		now,
+		now,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("insert job target: %w", err)
+	}
+
+	jobTargetID, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("read job target id: %w", err)
+	}
+
+	return jobTargetID, nil
 }
 
 func (r *InterviewRepository) loadQuestions(ctx context.Context, sessionID int64) ([]model.InterviewQuestion, error) {
@@ -1273,4 +1398,12 @@ func boolToTinyInt(value bool) int {
 
 func rollback(tx *sql.Tx) {
 	_ = tx.Rollback()
+}
+
+func defaultString(value string, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+
+	return strings.TrimSpace(value)
 }

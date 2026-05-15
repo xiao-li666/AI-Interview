@@ -1,8 +1,17 @@
 import { reactive } from "vue";
 import { api } from "../lib/api";
-import { setupDefaults } from "../data/mock";
+import { companyOptions, setupDefaults } from "../data/mock";
 
 const STORAGE_KEY = "ai-interview-app-state";
+
+function getInitialOpenTabs() {
+  if (typeof window === "undefined") {
+    return ["/"];
+  }
+
+  const path = window.location.pathname || "/";
+  return [path];
+}
 
 function loadPersistedState() {
   try {
@@ -18,21 +27,32 @@ function loadPersistedState() {
 }
 
 const persisted = typeof window !== "undefined" ? loadPersistedState() : null;
+const persistedConfig = persisted?.config
+  ? {
+      ...persisted.config,
+      resumeText: "",
+      resumeFileName: ""
+    }
+  : null;
 
 const state = reactive({
   config: {
     ...setupDefaults,
-    ...(persisted?.config || {})
+    ...(persistedConfig || {})
   },
+  companyOptions: normalizeCompanyOptions(persisted?.companyOptions),
   planId: persisted?.planId || null,
   sessionId: persisted?.sessionId || null,
+  selectedReportSessionId: persisted?.selectedReportSessionId || null,
   sessionDetail: null,
   currentQuestion: persisted?.currentQuestion || null,
   latestFeedback: null,
   latestAnswer: null,
   report: null,
   aiConfig: null,
+  openTabs: getInitialOpenTabs(),
   answerHistoryBySession: {},
+  questionReviewsBySession: {},
   history: [],
   health: null,
   loading: {
@@ -42,6 +62,7 @@ const state = reactive({
     report: false,
     history: false,
     home: false,
+    questionReviews: false,
     aiConfig: false,
     aiConfigTest: false
   },
@@ -56,9 +77,15 @@ function persist() {
   window.localStorage.setItem(
     STORAGE_KEY,
     JSON.stringify({
-      config: state.config,
+      config: {
+        ...state.config,
+        resumeText: "",
+        resumeFileName: ""
+      },
+      companyOptions: state.companyOptions,
       planId: state.planId,
       sessionId: state.sessionId,
+      selectedReportSessionId: state.selectedReportSessionId,
       currentQuestion: state.currentQuestion
     })
   );
@@ -82,6 +109,14 @@ function getAnswerHistory(sessionId = state.sessionId) {
   }
 
   return state.answerHistoryBySession[String(sessionId)] || [];
+}
+
+function getQuestionReviews(sessionId = state.sessionId) {
+  if (!sessionId) {
+    return [];
+  }
+
+  return state.questionReviewsBySession[String(sessionId)] || [];
 }
 
 async function bootstrapHome() {
@@ -109,6 +144,9 @@ async function createInterviewFlow() {
       jobCategory: state.config.jobCategory,
       levelCode: state.config.levelCode,
       interviewType: state.config.interviewType,
+      companyName: state.config.companyName,
+      resumeFileName: state.config.resumeFileName,
+      resumeText: state.config.resumeText,
       interviewMode: state.config.interviewMode,
       difficultyLevel: state.config.difficultyLevel,
       questionCount: Number(state.config.questionCount),
@@ -119,6 +157,12 @@ async function createInterviewFlow() {
       userId: Number(state.config.userId),
       jobTargetId: 0,
       jobTitle: state.config.jobTitle,
+      jobCategory: state.config.jobCategory,
+      levelCode: state.config.levelCode,
+      interviewType: state.config.interviewType,
+      companyName: state.config.companyName,
+      resumeFileName: state.config.resumeFileName,
+      resumeText: state.config.resumeText,
       sessionName: state.config.sessionName,
       roundType: state.config.roundType,
       interviewMode: state.config.interviewMode,
@@ -222,6 +266,26 @@ async function loadSessionAnswers(sessionId = state.sessionId) {
   }
 }
 
+async function loadQuestionReviews(sessionId = state.sessionId) {
+  if (!sessionId) {
+    return [];
+  }
+
+  state.loading.questionReviews = true;
+  setError("");
+
+  try {
+    const items = await api.getQuestionReviews(sessionId);
+    state.questionReviewsBySession[String(sessionId)] = items;
+    return items;
+  } catch (error) {
+    setError(error.message);
+    throw error;
+  } finally {
+    state.loading.questionReviews = false;
+  }
+}
+
 async function submitAnswer(answerText) {
   if (!state.sessionId || !state.currentQuestion) {
     throw new Error("当前没有可提交的题目");
@@ -271,6 +335,8 @@ async function loadReport(sessionId = state.sessionId) {
   try {
     const report = await api.getReport(sessionId);
     state.report = report;
+    state.selectedReportSessionId = sessionId;
+    persist();
     return report;
   } catch (error) {
     setError(error.message);
@@ -354,6 +420,20 @@ function updateConfig(patch) {
   persist();
 }
 
+function addCompanyOption(companyName) {
+  const name = String(companyName || "").trim();
+  if (!name) {
+    throw new Error("公司名称不能为空");
+  }
+
+  if (state.companyOptions.some((item) => item === name)) {
+    throw new Error("公司名称不能重复");
+  }
+
+  state.companyOptions = [...state.companyOptions, name];
+  persist();
+}
+
 function selectSession(sessionId) {
   if (state.sessionId !== sessionId) {
     state.currentQuestion = null;
@@ -363,10 +443,39 @@ function selectSession(sessionId) {
   persist();
 }
 
+function selectReportSession(sessionId) {
+  state.selectedReportSessionId = sessionId || null;
+  persist();
+}
+
 function resetInterviewState() {
   state.planId = null;
   state.sessionId = null;
+  state.selectedReportSessionId = null;
   clearRuntimeState();
+  persist();
+}
+
+function openTab(path) {
+  const currentTabs = state.openTabs.length ? state.openTabs : ["/"];
+  const existingIndex = currentTabs.indexOf(path);
+
+  if (existingIndex >= 0) {
+    state.openTabs = currentTabs.slice(0, existingIndex + 1);
+    persist();
+    return;
+  }
+
+  state.openTabs = [...currentTabs, path];
+  persist();
+}
+
+function closeTab(path) {
+  if (path === "/") {
+    return;
+  }
+
+  state.openTabs = state.openTabs.filter((item) => item !== path);
   persist();
 }
 
@@ -375,6 +484,7 @@ export function useInterviewState() {
     state,
     setError,
     updateConfig,
+    addCompanyOption,
     bootstrapHome,
     createInterviewFlow,
     loadSession,
@@ -388,7 +498,27 @@ export function useInterviewState() {
     saveAIConfig,
     testAIConfig,
     getAnswerHistory,
+    getQuestionReviews,
+    loadQuestionReviews,
     selectSession,
-    resetInterviewState
+    selectReportSession,
+    resetInterviewState,
+    openTab,
+    closeTab
   };
+}
+
+function normalizeCompanyOptions(items) {
+  const source = Array.isArray(items) && items.length ? items : companyOptions;
+  const unique = [];
+
+  for (const item of source) {
+    const name = String(item || "").trim();
+    if (!name || unique.includes(name)) {
+      continue;
+    }
+    unique.push(name);
+  }
+
+  return unique;
 }

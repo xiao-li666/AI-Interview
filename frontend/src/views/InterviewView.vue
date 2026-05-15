@@ -263,7 +263,9 @@ function focusQuestion(item) {
 async function syncSessionFromRoute() {
   const sessionId = Number(route.query.sessionId || state.sessionId);
   if (!sessionId) {
-    setError("没有选中的会话，请先创建一场面试。");
+    window.alert("请先进行面试配置");
+    setError("请先进行面试配置");
+    router.replace("/setup");
     return;
   }
 

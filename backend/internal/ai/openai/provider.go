@@ -99,7 +99,7 @@ func (p *Provider) GenerateQuestions(ctx context.Context, input ai.GenerateQuest
 		"additionalProperties": false,
 	}
 
-	systemPrompt := "你是一名中文技术面试官。请根据岗位、轮次、难度和风格，输出一组高质量中文面试题。题目要自然、有层次、适合真实技术面试场景。expectedPoints 只返回简洁中文短语，不要出现英文。"
+	systemPrompt := "你是一名中文技术面试官。请结合岗位信息、候选人简历、目标公司近几年常见题型和面试轮次，生成贴近真实场景的中文面试题。题目必须同时体现岗位匹配度、简历深挖和公司风格。expectedPoints 只返回简洁中文短语，不要英文，不要解释。"
 
 	var payload struct {
 		Questions []struct {
@@ -159,7 +159,7 @@ func (p *Provider) EvaluateAnswer(ctx context.Context, input ai.EvaluateAnswerIn
 		"additionalProperties": false,
 	}
 
-	systemPrompt := "你是一名严谨但友好的中文技术面试官。请根据题目、考察维度、回答内容和上下文，输出结构化评分与点评。所有分数范围为 0 到 100，文字评价必须使用简体中文，结论要具体，避免空泛套话。"
+	systemPrompt := "你是一名严谨但友好的中文技术面试官。请根据题目、考察维度、回答内容和上下文，输出结构化评分与点评。所有分数范围为 0 到 100，所有评价必须使用简体中文，结论要具体。"
 
 	var payload struct {
 		OverallScore          float64 `json:"overallScore"`
@@ -268,6 +268,74 @@ func (p *Provider) GenerateReport(ctx context.Context, input ai.GenerateReportIn
 		CreatedAt:          time.Now(),
 		Source:             p.Name(),
 	}, nil
+}
+
+func (p *Provider) GenerateQuestionReviews(ctx context.Context, input ai.GenerateQuestionReviewsInput) ([]model.QuestionReviewItem, error) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"items": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"questionId": map[string]any{"type": "number"},
+						"reviewType": map[string]any{
+							"type": "string",
+							"enum": []string{"correct_answer", "methodology"},
+						},
+						"title":   map[string]any{"type": "string"},
+						"content": map[string]any{"type": "string"},
+					},
+					"required":             []string{"questionId", "reviewType", "title", "content"},
+					"additionalProperties": false,
+				},
+			},
+		},
+		"required":             []string{"items"},
+		"additionalProperties": false,
+	}
+
+	systemPrompt := "你是一名中文技术面试复盘教练。请根据每道题的题型、题目、考察点、用户回答和反馈，生成精简题目解析。知识点题返回 reviewType=correct_answer，并直接给出精简正确答案；主观题和开放题返回 reviewType=methodology，并给出回答方向或方法论。content 控制在 120 字以内。"
+
+	var payload struct {
+		Items []struct {
+			QuestionID int64  `json:"questionId"`
+			ReviewType string `json:"reviewType"`
+			Title      string `json:"title"`
+			Content    string `json:"content"`
+		} `json:"items"`
+	}
+	if err := p.requestStructuredJSON(ctx, systemPrompt, input, "question_reviews", schema, &payload); err != nil {
+		return nil, err
+	}
+
+	answerMap := make(map[int64]model.SessionAnswerItem, len(input.AnswerHistory))
+	for _, item := range input.AnswerHistory {
+		answerMap[item.QuestionID] = item
+	}
+
+	reviews := make([]model.QuestionReviewItem, 0, len(payload.Items))
+	for _, item := range payload.Items {
+		answerItem, ok := answerMap[item.QuestionID]
+		if !ok {
+			continue
+		}
+
+		reviews = append(reviews, model.QuestionReviewItem{
+			QuestionID:          answerItem.QuestionID,
+			QuestionNo:          answerItem.QuestionNo,
+			QuestionType:        answerItem.QuestionType,
+			AssessmentDimension: answerItem.AssessmentDimension,
+			Prompt:              answerItem.Prompt,
+			ExpectedPoints:      answerItem.ExpectedPoints,
+			ReviewType:          strings.TrimSpace(item.ReviewType),
+			Title:               strings.TrimSpace(item.Title),
+			Content:             strings.TrimSpace(item.Content),
+		})
+	}
+
+	return reviews, nil
 }
 
 func (p *Provider) requestStructuredJSON(ctx context.Context, systemPrompt string, input any, schemaName string, schema map[string]any, out any) error {

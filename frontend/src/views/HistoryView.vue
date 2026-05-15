@@ -49,7 +49,7 @@ import { toRoundTypeLabel, toStatusLabel } from "../data/mock";
 import { useInterviewState } from "../state/interview";
 
 const router = useRouter();
-const { state, loadHistory, selectSession } = useInterviewState();
+const { state, loadHistory, selectSession, selectReportSession } = useInterviewState();
 
 function formatDate(value) {
   if (!value) {
@@ -60,7 +60,7 @@ function formatDate(value) {
 }
 
 function openSession(item) {
-  selectSession(item.sessionId);
+  selectReportSession(item.sessionId);
 
   if (item.status === "completed") {
     router.push({
@@ -70,6 +70,7 @@ function openSession(item) {
     return;
   }
 
+  selectSession(item.sessionId);
   router.push({
     path: "/interview",
     query: { sessionId: String(item.sessionId) }
