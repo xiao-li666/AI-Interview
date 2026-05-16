@@ -26,6 +26,13 @@ func BadRequest(w http.ResponseWriter, message string) {
 	})
 }
 
+func Unauthorized(w http.ResponseWriter, message string) {
+	write(w, http.StatusUnauthorized, Envelope{
+		Code:    http.StatusUnauthorized,
+		Message: message,
+	})
+}
+
 func NotFound(w http.ResponseWriter, message string) {
 	write(w, http.StatusNotFound, Envelope{
 		Code:    http.StatusNotFound,

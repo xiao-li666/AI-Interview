@@ -17,10 +17,6 @@
           <h4>岗位信息</h4>
           <div class="field-list">
             <label class="field">
-              <span>用户 ID</span>
-              <input v-model.number="form.userId" type="number" min="1" />
-            </label>
-            <label class="field">
               <span>岗位名称</span>
               <input v-model="form.jobTitle" type="text" placeholder="例如：Go 后端工程师" />
             </label>

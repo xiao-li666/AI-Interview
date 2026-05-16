@@ -1,12 +1,44 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8080";
+const TOKEN_KEY = "ai-interview-auth-token";
+
+export function getAuthToken() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  return window.localStorage.getItem(TOKEN_KEY) || "";
+}
+
+export function setAuthToken(token) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  if (!token) {
+    window.localStorage.removeItem(TOKEN_KEY);
+    return;
+  }
+
+  window.localStorage.setItem(TOKEN_KEY, token);
+}
 
 async function request(path, options = {}) {
+  const headers = {
+    ...(options.headers || {})
+  };
+
+  if (!(options.body instanceof FormData) && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
+
+  const token = getAuthToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {})
-    },
-    ...options
+    ...options,
+    headers
   });
 
   const payload = await response.json().catch(() => ({}));
@@ -18,6 +50,32 @@ async function request(path, options = {}) {
 }
 
 export const api = {
+  register(body) {
+    return request("/api/v1/auth/register", {
+      method: "POST",
+      body: JSON.stringify(body)
+    });
+  },
+  login(body) {
+    return request("/api/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify(body)
+    });
+  },
+  logout() {
+    return request("/api/v1/auth/logout", {
+      method: "POST"
+    });
+  },
+  getCurrentUser() {
+    return request("/api/v1/auth/me");
+  },
+  updateCurrentUser(body) {
+    return request("/api/v1/auth/me", {
+      method: "PUT",
+      body: JSON.stringify(body)
+    });
+  },
   health() {
     return request("/healthz");
   },
@@ -56,11 +114,11 @@ export const api = {
   getReport(sessionId) {
     return request(`/api/v1/interview-reports/${sessionId}`);
   },
-  getHistory(userId) {
-    return request(`/api/v1/history?userId=${userId}`);
+  getHistory() {
+    return request("/api/v1/history");
   },
-  getAIConfig(userId) {
-    return request(`/api/v1/ai-config?userId=${userId}`);
+  getAIConfig() {
+    return request("/api/v1/ai-config");
   },
   saveAIConfig(body) {
     return request("/api/v1/ai-config", {
@@ -78,18 +136,11 @@ export const api = {
     const formData = new FormData();
     formData.append("file", file);
 
-    const response = await fetch(`${API_BASE_URL}/api/v1/resume/parse`, {
+    return request("/api/v1/resume/parse", {
       method: "POST",
       body: formData
     });
-
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok || payload.code >= 400) {
-      throw new Error(payload.message || "Resume parse failed");
-    }
-
-    return payload.data;
   }
 };
 
-export { API_BASE_URL };
+export { API_BASE_URL, TOKEN_KEY };

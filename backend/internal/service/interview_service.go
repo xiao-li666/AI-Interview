@@ -151,7 +151,7 @@ func (s *InterviewService) CreateSession(ctx context.Context, req CreateSessionR
 	return s.repo.CreateSession(ctx, session, questions)
 }
 
-func (s *InterviewService) GetSession(ctx context.Context, sessionID int64) (model.SessionDetail, error) {
+func (s *InterviewService) GetSession(ctx context.Context, userID int64, sessionID int64) (model.SessionDetail, error) {
 	detail, err := s.repo.GetSession(ctx, sessionID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
@@ -161,10 +161,26 @@ func (s *InterviewService) GetSession(ctx context.Context, sessionID int64) (mod
 		return model.SessionDetail{}, err
 	}
 
+	if detail.Session.UserID != userID {
+		return model.SessionDetail{}, ErrNotFound
+	}
+
 	return detail, nil
 }
 
-func (s *InterviewService) GetNextQuestion(ctx context.Context, sessionID int64) (model.InterviewQuestion, error) {
+func (s *InterviewService) GetNextQuestion(ctx context.Context, userID int64, sessionID int64) (model.InterviewQuestion, error) {
+	detail, err := s.repo.GetSession(ctx, sessionID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return model.InterviewQuestion{}, ErrNotFound
+		}
+
+		return model.InterviewQuestion{}, err
+	}
+	if detail.Session.UserID != userID {
+		return model.InterviewQuestion{}, ErrNotFound
+	}
+
 	question, err := s.repo.GetNextQuestion(ctx, sessionID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
@@ -177,7 +193,7 @@ func (s *InterviewService) GetNextQuestion(ctx context.Context, sessionID int64)
 	return question, nil
 }
 
-func (s *InterviewService) SubmitAnswer(ctx context.Context, req SubmitAnswerRequest) (model.InterviewAnswer, model.AnswerFeedback, error) {
+func (s *InterviewService) SubmitAnswer(ctx context.Context, userID int64, req SubmitAnswerRequest) (model.InterviewAnswer, model.AnswerFeedback, error) {
 	if req.SessionID == 0 || req.QuestionID == 0 || strings.TrimSpace(req.AnswerText) == "" {
 		return model.InterviewAnswer{}, model.AnswerFeedback{}, errors.New("sessionId, questionId and answerText are required")
 	}
@@ -189,6 +205,9 @@ func (s *InterviewService) SubmitAnswer(ctx context.Context, req SubmitAnswerReq
 		}
 
 		return model.InterviewAnswer{}, model.AnswerFeedback{}, err
+	}
+	if detail.Session.UserID != userID {
+		return model.InterviewAnswer{}, model.AnswerFeedback{}, ErrNotFound
 	}
 
 	question, found := findQuestion(detail.Questions, req.QuestionID)
@@ -266,9 +285,20 @@ func (s *InterviewService) SubmitAnswer(ctx context.Context, req SubmitAnswerReq
 	return savedAnswer, savedFeedback, nil
 }
 
-func (s *InterviewService) GetSessionAnswers(ctx context.Context, sessionID int64) ([]model.SessionAnswerItem, error) {
+func (s *InterviewService) GetSessionAnswers(ctx context.Context, userID int64, sessionID int64) ([]model.SessionAnswerItem, error) {
 	if sessionID == 0 {
 		return nil, errors.New("sessionId is required")
+	}
+
+	detail, err := s.repo.GetSession(ctx, sessionID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if detail.Session.UserID != userID {
+		return nil, ErrNotFound
 	}
 
 	items, err := s.repo.ListSessionAnswers(ctx, sessionID)
@@ -283,7 +313,7 @@ func (s *InterviewService) GetSessionAnswers(ctx context.Context, sessionID int6
 	return items, nil
 }
 
-func (s *InterviewService) GetQuestionReviews(ctx context.Context, sessionID int64) ([]model.QuestionReviewItem, error) {
+func (s *InterviewService) GetQuestionReviews(ctx context.Context, userID int64, sessionID int64) ([]model.QuestionReviewItem, error) {
 	if sessionID == 0 {
 		return nil, errors.New("sessionId is required")
 	}
@@ -295,6 +325,9 @@ func (s *InterviewService) GetQuestionReviews(ctx context.Context, sessionID int
 		}
 
 		return nil, err
+	}
+	if detail.Session.UserID != userID {
+		return nil, ErrNotFound
 	}
 
 	answerHistory, err := s.repo.ListSessionAnswers(ctx, sessionID)
@@ -323,7 +356,19 @@ func (s *InterviewService) GetQuestionReviews(ctx context.Context, sessionID int
 	return items, nil
 }
 
-func (s *InterviewService) GetReport(ctx context.Context, sessionID int64) (model.InterviewReport, error) {
+func (s *InterviewService) GetReport(ctx context.Context, userID int64, sessionID int64) (model.InterviewReport, error) {
+	detail, err := s.repo.GetSession(ctx, sessionID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return model.InterviewReport{}, ErrNotFound
+		}
+
+		return model.InterviewReport{}, err
+	}
+	if detail.Session.UserID != userID {
+		return model.InterviewReport{}, ErrNotFound
+	}
+
 	report, err := s.repo.GetReport(ctx, sessionID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {

@@ -1,5 +1,5 @@
 import { reactive } from "vue";
-import { api } from "../lib/api";
+import { api, getAuthToken, setAuthToken } from "../lib/api";
 import { companyOptions, setupDefaults } from "../data/mock";
 
 const STORAGE_KEY = "ai-interview-app-state";
@@ -10,6 +10,9 @@ function getInitialOpenTabs() {
   }
 
   const path = window.location.pathname || "/";
+  if (path === "/login" || path === "/register") {
+    return [];
+  }
   return [path];
 }
 
@@ -36,6 +39,9 @@ const persistedConfig = persisted?.config
   : null;
 
 const state = reactive({
+  user: persisted?.user || null,
+  isAuthenticated: Boolean(getAuthToken()),
+  authReady: false,
   config: {
     ...setupDefaults,
     ...(persistedConfig || {})
@@ -56,6 +62,10 @@ const state = reactive({
   history: [],
   health: null,
   loading: {
+    auth: false,
+    register: false,
+    login: false,
+    profile: false,
     setup: false,
     question: false,
     answer: false,
@@ -77,6 +87,7 @@ function persist() {
   window.localStorage.setItem(
     STORAGE_KEY,
     JSON.stringify({
+      user: state.user,
       config: {
         ...state.config,
         resumeText: "",
@@ -91,6 +102,14 @@ function persist() {
   );
 }
 
+function clearPersistedState() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.removeItem(STORAGE_KEY);
+}
+
 function setError(message) {
   state.error = message || "";
 }
@@ -101,6 +120,9 @@ function clearRuntimeState() {
   state.latestFeedback = null;
   state.latestAnswer = null;
   state.report = null;
+  state.history = [];
+  state.answerHistoryBySession = {};
+  state.questionReviewsBySession = {};
 }
 
 function getAnswerHistory(sessionId = state.sessionId) {
@@ -119,13 +141,112 @@ function getQuestionReviews(sessionId = state.sessionId) {
   return state.questionReviewsBySession[String(sessionId)] || [];
 }
 
+async function initAuth() {
+  if (!state.isAuthenticated) {
+    state.authReady = true;
+    return null;
+  }
+
+  state.loading.auth = true;
+  try {
+    const user = await api.getCurrentUser();
+    state.user = user;
+    state.isAuthenticated = true;
+    persist();
+    return user;
+  } catch {
+    logoutLocal();
+    return null;
+  } finally {
+    state.loading.auth = false;
+    state.authReady = true;
+  }
+}
+
+async function register(payload) {
+  state.loading.register = true;
+  setError("");
+
+  try {
+    const session = await api.register(payload);
+    setAuthToken(session.token);
+    state.user = session.user;
+    state.isAuthenticated = true;
+    persist();
+    return session;
+  } catch (error) {
+    setError(error.message);
+    throw error;
+  } finally {
+    state.loading.register = false;
+  }
+}
+
+async function login(payload) {
+  state.loading.login = true;
+  setError("");
+
+  try {
+    const session = await api.login(payload);
+    setAuthToken(session.token);
+    state.user = session.user;
+    state.isAuthenticated = true;
+    persist();
+    return session;
+  } catch (error) {
+    setError(error.message);
+    throw error;
+  } finally {
+    state.loading.login = false;
+  }
+}
+
+async function logout() {
+  try {
+    if (state.isAuthenticated) {
+      await api.logout();
+    }
+  } catch {
+    // ignore logout errors
+  } finally {
+    logoutLocal();
+  }
+}
+
+async function updateCurrentUser(payload) {
+  state.loading.profile = true;
+  setError("");
+
+  try {
+    const user = await api.updateCurrentUser(payload);
+    state.user = user;
+    persist();
+    return user;
+  } catch (error) {
+    setError(error.message);
+    throw error;
+  } finally {
+    state.loading.profile = false;
+  }
+}
+
+function logoutLocal() {
+  setAuthToken("");
+  state.user = null;
+  state.isAuthenticated = false;
+  state.authReady = true;
+  state.aiConfig = null;
+  resetInterviewState();
+  clearPersistedState();
+}
+
 async function bootstrapHome() {
   state.loading.home = true;
   setError("");
 
   try {
     state.health = await api.health();
-    state.history = await api.getHistory(state.config.userId);
+    state.history = await api.getHistory();
   } catch (error) {
     setError(error.message);
   } finally {
@@ -139,7 +260,6 @@ async function createInterviewFlow() {
 
   try {
     const plan = await api.createPlan({
-      userId: Number(state.config.userId),
       jobTitle: state.config.jobTitle,
       jobCategory: state.config.jobCategory,
       levelCode: state.config.levelCode,
@@ -154,7 +274,6 @@ async function createInterviewFlow() {
     });
 
     const sessionDetail = await api.createSession({
-      userId: Number(state.config.userId),
       jobTargetId: 0,
       jobTitle: state.config.jobTitle,
       jobCategory: state.config.jobCategory,
@@ -351,7 +470,7 @@ async function loadHistory() {
   setError("");
 
   try {
-    const items = await api.getHistory(state.config.userId);
+    const items = await api.getHistory();
     state.history = items;
     return items;
   } catch (error) {
@@ -362,12 +481,12 @@ async function loadHistory() {
   }
 }
 
-async function loadAIConfig(userId = state.config.userId) {
+async function loadAIConfig() {
   state.loading.aiConfig = true;
   setError("");
 
   try {
-    const config = await api.getAIConfig(Number(userId));
+    const config = await api.getAIConfig();
     state.aiConfig = config;
     return config;
   } catch (error) {
@@ -457,6 +576,10 @@ function resetInterviewState() {
 }
 
 function openTab(path) {
+  if (!path || path === "/login" || path === "/register") {
+    return;
+  }
+
   const currentTabs = state.openTabs.length ? state.openTabs : ["/"];
   const existingIndex = currentTabs.indexOf(path);
 
@@ -483,6 +606,11 @@ export function useInterviewState() {
   return {
     state,
     setError,
+    initAuth,
+    register,
+    login,
+    logout,
+    updateCurrentUser,
     updateConfig,
     addCompanyOption,
     bootstrapHome,

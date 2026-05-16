@@ -50,7 +50,7 @@
     </aside>
 
     <main class="content">
-      <header class="topbar">
+      <header class="topbar topbar-layout">
         <div class="tabbar">
           <div
             v-for="item in visibleTabs"
@@ -71,6 +71,76 @@
             </button>
           </div>
         </div>
+
+        <div class="user-panel" ref="userPanelRef">
+          <div
+            class="user-profile-zone"
+            @mouseenter="handleProfileEnter"
+            @mouseleave="handleProfileLeave"
+          >
+            <button type="button" class="user-profile-trigger" @click="goToSettings">
+              <span class="user-avatar">
+                <img
+                  v-if="state.user?.avatarUrl"
+                  :src="state.user.avatarUrl"
+                  :alt="displayName"
+                  class="user-avatar-image"
+                />
+                <span v-else class="user-avatar-fallback">{{ avatarText }}</span>
+              </span>
+
+              <span class="user-summary">
+                <strong>{{ displayName }}</strong>
+                <span>账号设置</span>
+              </span>
+            </button>
+
+            <div class="user-hover-card" :class="{ 'is-open': userHoverOpen }">
+              <div class="user-hover-head">
+                <span class="user-avatar user-avatar-large">
+                  <img
+                    v-if="state.user?.avatarUrl"
+                    :src="state.user.avatarUrl"
+                    :alt="displayName"
+                    class="user-avatar-image"
+                  />
+                  <span v-else class="user-avatar-fallback">{{ avatarText }}</span>
+                </span>
+
+                <div class="user-hover-copy">
+                  <strong>{{ displayName }}</strong>
+                  <span>{{ state.user?.email || "未绑定账号" }}</span>
+                </div>
+              </div>
+
+              <div class="user-hover-body">
+                <div>
+                  <span class="user-hover-label">昵称</span>
+                  <p>{{ state.user?.nickname || "未设置昵称" }}</p>
+                </div>
+                <div>
+                  <span class="user-hover-label">账号</span>
+                  <p>{{ state.user?.email || "-" }}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="user-menu-zone">
+            <button
+              type="button"
+              class="user-menu-trigger"
+              :class="{ 'is-open': userMenuOpen }"
+              @click.stop="toggleUserMenu"
+            >
+              ▾
+            </button>
+
+            <div v-if="userMenuOpen" class="user-menu-dropdown">
+              <button type="button" class="user-menu-item" @click="handleLogout">退出登录</button>
+            </div>
+          </div>
+        </div>
       </header>
 
       <section class="page-body">
@@ -81,14 +151,14 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import brandLogo from "../assets/brand-logo.svg";
 import { useInterviewState } from "../state/interview";
 
 const route = useRoute();
 const router = useRouter();
-const { state, openTab, closeTab } = useInterviewState();
+const { state, openTab, closeTab, logout } = useInterviewState();
 
 const navTree = [
   { label: "主页", to: "/" },
@@ -115,10 +185,14 @@ const routeLabelMap = {
   "/interview": "模拟面试",
   "/history": "历史记录",
   "/report": "复盘报告",
-  "/ai-config": "模型配置"
+  "/ai-config": "模型配置",
+  "/settings": "个人设置"
 };
 
 const expandedGroups = ref([]);
+const userHoverOpen = ref(false);
+const userMenuOpen = ref(false);
+const userPanelRef = ref(null);
 
 const visibleTabs = computed(() => {
   const uniquePaths = state.openTabs.filter((path, index, items) => items.indexOf(path) === index);
@@ -126,6 +200,16 @@ const visibleTabs = computed(() => {
     path,
     label: routeLabelMap[path] || path
   }));
+});
+
+const displayName = computed(() => state.user?.nickname || state.user?.email || "当前用户");
+
+const avatarText = computed(() => {
+  const source = String(displayName.value || "").trim();
+  if (!source) {
+    return "AI";
+  }
+  return source.slice(0, 2).toUpperCase();
 });
 
 function isExpanded(label) {
@@ -190,11 +274,54 @@ function handleCloseTab(path) {
   }
 }
 
+function goToSettings() {
+  userHoverOpen.value = false;
+  if (document.activeElement instanceof HTMLElement) {
+    document.activeElement.blur();
+  }
+  openTab("/settings");
+  router.push("/settings");
+}
+
+function handleProfileEnter() {
+  userHoverOpen.value = true;
+}
+
+function handleProfileLeave() {
+  userHoverOpen.value = false;
+}
+
+function toggleUserMenu() {
+  userMenuOpen.value = !userMenuOpen.value;
+}
+
+function handleOutsidePointer(event) {
+  if (!userPanelRef.value?.contains(event.target)) {
+    userMenuOpen.value = false;
+  }
+}
+
+async function handleLogout() {
+  userMenuOpen.value = false;
+  await logout();
+  router.replace("/login");
+}
+
 watch(
   () => route.path,
   (path) => {
+    userHoverOpen.value = false;
+    userMenuOpen.value = false;
     openTab(path);
   },
   { immediate: true }
 );
+
+onMounted(() => {
+  document.addEventListener("mousedown", handleOutsidePointer);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener("mousedown", handleOutsidePointer);
+});
 </script>

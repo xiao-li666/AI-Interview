@@ -11,6 +11,8 @@ type Config struct {
 	DeepSeek DeepSeekConfig
 	OpenAI   OpenAIConfig
 	Runtime  RuntimeConfig
+	Auth     AuthConfig
+	Admin    AdminConfig
 }
 
 type ServerConfig struct {
@@ -42,6 +44,18 @@ type RuntimeConfig struct {
 	PythonPath string
 }
 
+type AuthConfig struct {
+	JWTSecret         string
+	TokenExpireHours  int
+	DefaultUserStatus string
+}
+
+type AdminConfig struct {
+	SeedEmail    string
+	SeedPassword string
+	SeedNickname string
+}
+
 func Load() Config {
 	return Config{
 		Server: ServerConfig{
@@ -70,6 +84,16 @@ func Load() Config {
 				"PYTHON_RUNTIME_PATH",
 				`C:\Users\xiaoli\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe`,
 			),
+		},
+		Auth: AuthConfig{
+			JWTSecret:         stringFromEnv("JWT_SECRET", "ai-interview-dev-secret"),
+			TokenExpireHours:  intFromEnv("JWT_EXPIRE_HOURS", 168),
+			DefaultUserStatus: stringFromEnv("DEFAULT_USER_STATUS", "active"),
+		},
+		Admin: AdminConfig{
+			SeedEmail:    stringFromEnv("ADMIN_SEED_EMAIL", "admin@ai-interview.local"),
+			SeedPassword: stringFromEnv("ADMIN_SEED_PASSWORD", "Admin@123456"),
+			SeedNickname: stringFromEnv("ADMIN_SEED_NICKNAME", "系统管理员"),
 		},
 	}
 }

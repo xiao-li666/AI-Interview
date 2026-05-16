@@ -14,12 +14,21 @@ import (
 
 type APIHandler struct {
 	service      *service.InterviewService
+	authService  *service.AuthService
+	adminService *service.AdminService
 	resumeParser *service.ResumeParser
 }
 
-func NewAPIHandler(service *service.InterviewService, resumeParser *service.ResumeParser) *APIHandler {
+func NewAPIHandler(
+	service *service.InterviewService,
+	authService *service.AuthService,
+	adminService *service.AdminService,
+	resumeParser *service.ResumeParser,
+) *APIHandler {
 	return &APIHandler{
 		service:      service,
+		authService:  authService,
+		adminService: adminService,
 		resumeParser: resumeParser,
 	}
 }
@@ -27,6 +36,22 @@ func NewAPIHandler(service *service.InterviewService, resumeParser *service.Resu
 func (h *APIHandler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", h.handleHealth)
+	mux.HandleFunc("/api/v1/auth/register", h.handleAuthRegister)
+	mux.HandleFunc("/api/v1/auth/login", h.handleAuthLogin)
+	mux.HandleFunc("/api/v1/auth/logout", h.handleAuthLogout)
+	mux.HandleFunc("/api/v1/auth/me", h.handleAuthMe)
+	mux.HandleFunc("/api/v1/admin/auth/login", h.handleAdminAuthLogin)
+	mux.HandleFunc("/api/v1/admin/auth/logout", h.handleAdminAuthLogout)
+	mux.HandleFunc("/api/v1/admin/auth/me", h.handleAdminAuthMe)
+	mux.HandleFunc("/api/v1/admin/overview", h.handleAdminOverview)
+	mux.HandleFunc("/api/v1/admin/users", h.handleAdminUsers)
+	mux.HandleFunc("/api/v1/admin/users/", h.handleAdminUserActions)
+	mux.HandleFunc("/api/v1/admin/interview-sessions", h.handleAdminInterviewSessions)
+	mux.HandleFunc("/api/v1/admin/interview-sessions/", h.handleAdminInterviewSessionActions)
+	mux.HandleFunc("/api/v1/admin/interview-reports/", h.handleAdminInterviewReports)
+	mux.HandleFunc("/api/v1/admin/resumes", h.handleAdminResumes)
+	mux.HandleFunc("/api/v1/admin/resumes/", h.handleAdminResumeActions)
+	mux.HandleFunc("/api/v1/admin/ai-configs", h.handleAdminAIConfigs)
 	mux.HandleFunc("/api/v1/interview-plans", h.handleInterviewPlans)
 	mux.HandleFunc("/api/v1/interview-sessions", h.handleInterviewSessions)
 	mux.HandleFunc("/api/v1/interview-sessions/", h.handleInterviewSessionActions)
@@ -37,7 +62,7 @@ func (h *APIHandler) Routes() http.Handler {
 	mux.HandleFunc("/api/v1/ai-config/test", h.handleAIConfigTest)
 	mux.HandleFunc("/api/v1/resume/parse", h.handleResumeParse)
 
-	return withMiddleware(mux)
+	return withMiddleware(mux, h.authService, h.adminService)
 }
 
 func (h *APIHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -51,6 +76,88 @@ func (h *APIHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *APIHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.MethodNotAllowed(w)
+		return
+	}
+
+	var req service.RegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.BadRequest(w, "invalid request body")
+		return
+	}
+
+	result, err := h.authService.Register(r.Context(), req)
+	if err != nil {
+		handleServiceError(w, err)
+		return
+	}
+
+	response.JSON(w, http.StatusCreated, result)
+}
+
+func (h *APIHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.MethodNotAllowed(w)
+		return
+	}
+
+	var req service.LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.BadRequest(w, "invalid request body")
+		return
+	}
+
+	result, err := h.authService.Login(r.Context(), req)
+	if err != nil {
+		handleServiceError(w, err)
+		return
+	}
+
+	response.JSON(w, http.StatusOK, result)
+}
+
+func (h *APIHandler) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.MethodNotAllowed(w)
+		return
+	}
+
+	response.JSON(w, http.StatusOK, map[string]any{
+		"ok": true,
+	})
+}
+
+func (h *APIHandler) handleAuthMe(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		user, err := h.authService.GetCurrentUser(r.Context(), currentUserID(r.Context()))
+		if err != nil {
+			handleServiceError(w, err)
+			return
+		}
+
+		response.JSON(w, http.StatusOK, user)
+	case http.MethodPut:
+		var req service.UpdateProfileRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			response.BadRequest(w, "invalid request body")
+			return
+		}
+
+		user, err := h.authService.UpdateCurrentUser(r.Context(), currentUserID(r.Context()), req)
+		if err != nil {
+			handleServiceError(w, err)
+			return
+		}
+
+		response.JSON(w, http.StatusOK, user)
+	default:
+		response.MethodNotAllowed(w)
+	}
+}
+
 func (h *APIHandler) handleInterviewPlans(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.MethodNotAllowed(w)
@@ -62,10 +169,11 @@ func (h *APIHandler) handleInterviewPlans(w http.ResponseWriter, r *http.Request
 		response.BadRequest(w, "invalid request body")
 		return
 	}
+	req.UserID = currentUserID(r.Context())
 
 	plan, err := h.service.CreatePlan(r.Context(), req)
 	if err != nil {
-		response.BadRequest(w, err.Error())
+		handleServiceError(w, err)
 		return
 	}
 
@@ -83,10 +191,11 @@ func (h *APIHandler) handleInterviewSessions(w http.ResponseWriter, r *http.Requ
 		response.BadRequest(w, "invalid request body")
 		return
 	}
+	req.UserID = currentUserID(r.Context())
 
 	detail, err := h.service.CreateSession(r.Context(), req)
 	if err != nil {
-		response.BadRequest(w, err.Error())
+		handleServiceError(w, err)
 		return
 	}
 
@@ -110,7 +219,7 @@ func (h *APIHandler) handleInterviewSessionActions(w http.ResponseWriter, r *htt
 	}
 
 	if len(parts) == 1 && r.Method == http.MethodGet {
-		detail, getErr := h.service.GetSession(r.Context(), sessionID)
+		detail, getErr := h.service.GetSession(r.Context(), currentUserID(r.Context()), sessionID)
 		if getErr != nil {
 			handleServiceError(w, getErr)
 			return
@@ -121,7 +230,7 @@ func (h *APIHandler) handleInterviewSessionActions(w http.ResponseWriter, r *htt
 	}
 
 	if len(parts) == 2 && parts[1] == "answers" && r.Method == http.MethodGet {
-		items, getErr := h.service.GetSessionAnswers(r.Context(), sessionID)
+		items, getErr := h.service.GetSessionAnswers(r.Context(), currentUserID(r.Context()), sessionID)
 		if getErr != nil {
 			handleServiceError(w, getErr)
 			return
@@ -132,7 +241,7 @@ func (h *APIHandler) handleInterviewSessionActions(w http.ResponseWriter, r *htt
 	}
 
 	if len(parts) == 2 && parts[1] == "question-reviews" && r.Method == http.MethodGet {
-		items, getErr := h.service.GetQuestionReviews(r.Context(), sessionID)
+		items, getErr := h.service.GetQuestionReviews(r.Context(), currentUserID(r.Context()), sessionID)
 		if getErr != nil {
 			handleServiceError(w, getErr)
 			return
@@ -143,7 +252,7 @@ func (h *APIHandler) handleInterviewSessionActions(w http.ResponseWriter, r *htt
 	}
 
 	if len(parts) == 3 && parts[1] == "questions" && parts[2] == "next" && r.Method == http.MethodPost {
-		question, getErr := h.service.GetNextQuestion(r.Context(), sessionID)
+		question, getErr := h.service.GetNextQuestion(r.Context(), currentUserID(r.Context()), sessionID)
 		if getErr != nil {
 			handleServiceError(w, getErr)
 			return
@@ -168,7 +277,7 @@ func (h *APIHandler) handleInterviewAnswers(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	answer, feedback, err := h.service.SubmitAnswer(r.Context(), req)
+	answer, feedback, err := h.service.SubmitAnswer(r.Context(), currentUserID(r.Context()), req)
 	if err != nil {
 		handleServiceError(w, err)
 		return
@@ -192,7 +301,7 @@ func (h *APIHandler) handleInterviewReports(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	report, getErr := h.service.GetReport(r.Context(), sessionID)
+	report, getErr := h.service.GetReport(r.Context(), currentUserID(r.Context()), sessionID)
 	if getErr != nil {
 		handleServiceError(w, getErr)
 		return
@@ -207,14 +316,7 @@ func (h *APIHandler) handleHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userIDValue := r.URL.Query().Get("userId")
-	userID, err := strconv.ParseInt(userIDValue, 10, 64)
-	if err != nil {
-		response.BadRequest(w, "invalid userId")
-		return
-	}
-
-	items, getErr := h.service.ListHistory(r.Context(), userID)
+	items, getErr := h.service.ListHistory(r.Context(), currentUserID(r.Context()))
 	if getErr != nil {
 		handleServiceError(w, getErr)
 		return
@@ -226,14 +328,7 @@ func (h *APIHandler) handleHistory(w http.ResponseWriter, r *http.Request) {
 func (h *APIHandler) handleAIConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		userIDValue := r.URL.Query().Get("userId")
-		userID, err := strconv.ParseInt(userIDValue, 10, 64)
-		if err != nil {
-			response.BadRequest(w, "invalid userId")
-			return
-		}
-
-		cfg, getErr := h.service.GetUserAIConfig(r.Context(), userID)
+		cfg, getErr := h.service.GetUserAIConfig(r.Context(), currentUserID(r.Context()))
 		if getErr != nil {
 			handleServiceError(w, getErr)
 			return
@@ -246,6 +341,7 @@ func (h *APIHandler) handleAIConfig(w http.ResponseWriter, r *http.Request) {
 			response.BadRequest(w, "invalid request body")
 			return
 		}
+		req.UserID = currentUserID(r.Context())
 
 		cfg, saveErr := h.service.SaveUserAIConfig(r.Context(), req)
 		if saveErr != nil {
@@ -270,6 +366,7 @@ func (h *APIHandler) handleAIConfigTest(w http.ResponseWriter, r *http.Request) 
 		response.BadRequest(w, "invalid request body")
 		return
 	}
+	req.UserID = currentUserID(r.Context())
 
 	result, testErr := h.service.TestUserAIConfig(r.Context(), req)
 	if testErr != nil {

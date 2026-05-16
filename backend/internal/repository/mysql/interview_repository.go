@@ -22,6 +22,134 @@ func NewInterviewRepository(db *sql.DB) *InterviewRepository {
 	return &InterviewRepository{db: db}
 }
 
+func (r *InterviewRepository) CreateUser(ctx context.Context, user model.User) (model.User, error) {
+	now := time.Now()
+	result, err := r.db.ExecContext(
+		ctx,
+		`INSERT INTO users (email, password_hash, nickname, avatar_url, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		user.Email,
+		user.PasswordHash,
+		user.Nickname,
+		nullString(user.AvatarURL),
+		defaultString(user.Status, "active"),
+		now,
+		now,
+	)
+	if err != nil {
+		return model.User{}, fmt.Errorf("insert user: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return model.User{}, fmt.Errorf("read user id: %w", err)
+	}
+
+	user.ID = id
+	user.Status = defaultString(user.Status, "active")
+	user.CreatedAt = now
+	user.UpdatedAt = now
+	return user, nil
+}
+
+func (r *InterviewRepository) GetUserByEmail(ctx context.Context, email string) (model.User, error) {
+	return r.loadUser(ctx, "email = ?", email)
+}
+
+func (r *InterviewRepository) GetUserByID(ctx context.Context, userID int64) (model.User, error) {
+	return r.loadUser(ctx, "id = ?", userID)
+}
+
+func (r *InterviewRepository) UpdateUser(ctx context.Context, user model.User) (model.User, error) {
+	now := time.Now()
+	result, err := r.db.ExecContext(
+		ctx,
+		`UPDATE users
+		SET nickname = ?, avatar_url = ?, status = ?, updated_at = ?
+		WHERE id = ?`,
+		user.Nickname,
+		nullString(user.AvatarURL),
+		defaultString(user.Status, "active"),
+		now,
+		user.ID,
+	)
+	if err != nil {
+		return model.User{}, fmt.Errorf("update user: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return model.User{}, fmt.Errorf("read updated user rows: %w", err)
+	}
+	if affected == 0 {
+		return model.User{}, repository.ErrNotFound
+	}
+
+	return r.GetUserByID(ctx, user.ID)
+}
+
+func (r *InterviewRepository) UpdateUserPassword(ctx context.Context, userID int64, passwordHash string) error {
+	result, err := r.db.ExecContext(
+		ctx,
+		`UPDATE users
+		SET password_hash = ?, updated_at = ?
+		WHERE id = ?`,
+		passwordHash,
+		time.Now(),
+		userID,
+	)
+	if err != nil {
+		return fmt.Errorf("update user password: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read updated password rows: %w", err)
+	}
+	if affected == 0 {
+		return repository.ErrNotFound
+	}
+
+	return nil
+}
+
+func (r *InterviewRepository) CreateAdmin(ctx context.Context, admin model.Admin) (model.Admin, error) {
+	now := time.Now()
+	result, err := r.db.ExecContext(
+		ctx,
+		`INSERT INTO admins (email, password_hash, nickname, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		admin.Email,
+		admin.PasswordHash,
+		admin.Nickname,
+		defaultString(admin.Status, "active"),
+		now,
+		now,
+	)
+	if err != nil {
+		return model.Admin{}, fmt.Errorf("insert admin: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return model.Admin{}, fmt.Errorf("read admin id: %w", err)
+	}
+
+	admin.ID = id
+	admin.Status = defaultString(admin.Status, "active")
+	admin.CreatedAt = now
+	admin.UpdatedAt = now
+	return admin, nil
+}
+
+func (r *InterviewRepository) GetAdminByEmail(ctx context.Context, email string) (model.Admin, error) {
+	return r.loadAdmin(ctx, "email = ?", email)
+}
+
+func (r *InterviewRepository) GetAdminByID(ctx context.Context, adminID int64) (model.Admin, error) {
+	return r.loadAdmin(ctx, "id = ?", adminID)
+}
+
 func (r *InterviewRepository) CreatePlan(ctx context.Context, plan model.InterviewPlan) (model.InterviewPlan, error) {
 	now := time.Now()
 	result, err := r.db.ExecContext(
@@ -788,6 +916,409 @@ func (r *InterviewRepository) UpsertUserAIConfig(ctx context.Context, cfg model.
 	return cfg, nil
 }
 
+func (r *InterviewRepository) ListAdminUsers(ctx context.Context, query model.AdminListQuery) (model.PagedResult[model.AdminUserListItem], error) {
+	whereClause, args := buildAdminUserFilter(query)
+	total, err := r.countRows(ctx, "SELECT COUNT(*) FROM users u"+whereClause, args...)
+	if err != nil {
+		return model.PagedResult[model.AdminUserListItem]{}, fmt.Errorf("count admin users: %w", err)
+	}
+
+	offset := (query.Page - 1) * query.PageSize
+	rows, err := r.db.QueryContext(
+		ctx,
+		`SELECT u.id, u.email, u.nickname, u.status, u.created_at, u.updated_at
+		FROM users u`+whereClause+`
+		ORDER BY u.created_at DESC
+		LIMIT ? OFFSET ?`,
+		append(args, query.PageSize, offset)...,
+	)
+	if err != nil {
+		return model.PagedResult[model.AdminUserListItem]{}, fmt.Errorf("list admin users: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]model.AdminUserListItem, 0)
+	for rows.Next() {
+		var item model.AdminUserListItem
+		if err := rows.Scan(&item.ID, &item.Email, &item.Nickname, &item.Status, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return model.PagedResult[model.AdminUserListItem]{}, fmt.Errorf("scan admin user: %w", err)
+		}
+		items = append(items, item)
+	}
+
+	return model.PagedResult[model.AdminUserListItem]{
+		Items:    items,
+		Total:    total,
+		Page:     query.Page,
+		PageSize: query.PageSize,
+	}, rows.Err()
+}
+
+func (r *InterviewRepository) GetAdminUserDetail(ctx context.Context, userID int64) (model.AdminUserDetail, error) {
+	user, err := r.GetUserByID(ctx, userID)
+	if err != nil {
+		return model.AdminUserDetail{}, err
+	}
+
+	sessionCount, err := r.countRows(ctx, "SELECT COUNT(*) FROM interview_sessions WHERE user_id = ?", userID)
+	if err != nil {
+		return model.AdminUserDetail{}, fmt.Errorf("count user sessions: %w", err)
+	}
+
+	resumeCount, err := r.countRows(ctx, "SELECT COUNT(*) FROM resumes WHERE user_id = ?", userID)
+	if err != nil {
+		return model.AdminUserDetail{}, fmt.Errorf("count user resumes: %w", err)
+	}
+
+	reportCount, err := r.countRows(ctx, `SELECT COUNT(*)
+		FROM interview_reports ir
+		INNER JOIN interview_sessions s ON s.id = ir.session_id
+		WHERE s.user_id = ?`, userID)
+	if err != nil {
+		return model.AdminUserDetail{}, fmt.Errorf("count user reports: %w", err)
+	}
+
+	aiConfigCount, err := r.countRows(ctx, "SELECT COUNT(*) FROM user_ai_provider_configs WHERE user_id = ?", userID)
+	if err != nil {
+		return model.AdminUserDetail{}, fmt.Errorf("count user ai configs: %w", err)
+	}
+
+	return model.AdminUserDetail{
+		User:          user,
+		SessionCount:  sessionCount,
+		ResumeCount:   resumeCount,
+		ReportCount:   reportCount,
+		AIConfigCount: aiConfigCount,
+	}, nil
+}
+
+func (r *InterviewRepository) ListAdminInterviewSessions(ctx context.Context, query model.AdminListQuery) (model.PagedResult[model.AdminInterviewSessionListItem], error) {
+	whereClause, args := buildAdminSessionFilter(query)
+	total, err := r.countRows(
+		ctx,
+		`SELECT COUNT(*)
+		FROM interview_sessions s
+		INNER JOIN users u ON u.id = s.user_id
+		LEFT JOIN job_targets jt ON jt.id = s.job_target_id`+whereClause,
+		args...,
+	)
+	if err != nil {
+		return model.PagedResult[model.AdminInterviewSessionListItem]{}, fmt.Errorf("count admin sessions: %w", err)
+	}
+
+	offset := (query.Page - 1) * query.PageSize
+	rows, err := r.db.QueryContext(
+		ctx,
+		`SELECT
+			s.id,
+			s.user_id,
+			u.email,
+			u.nickname,
+			s.session_name,
+			s.job_title,
+			COALESCE(jt.company_name, ''),
+			s.round_type,
+			s.status,
+			r.overall_score,
+			s.created_at,
+			s.ended_at
+		FROM interview_sessions s
+		INNER JOIN users u ON u.id = s.user_id
+		LEFT JOIN job_targets jt ON jt.id = s.job_target_id
+		LEFT JOIN interview_reports r ON r.session_id = s.id`+whereClause+`
+		ORDER BY s.created_at DESC
+		LIMIT ? OFFSET ?`,
+		append(args, query.PageSize, offset)...,
+	)
+	if err != nil {
+		return model.PagedResult[model.AdminInterviewSessionListItem]{}, fmt.Errorf("list admin sessions: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]model.AdminInterviewSessionListItem, 0)
+	for rows.Next() {
+		var (
+			item         model.AdminInterviewSessionListItem
+			overallScore sql.NullFloat64
+			completedAt  sql.NullTime
+		)
+
+		if err := rows.Scan(
+			&item.SessionID,
+			&item.UserID,
+			&item.UserEmail,
+			&item.UserNickname,
+			&item.SessionName,
+			&item.JobTitle,
+			&item.CompanyName,
+			&item.RoundType,
+			&item.Status,
+			&overallScore,
+			&item.CreatedAt,
+			&completedAt,
+		); err != nil {
+			return model.PagedResult[model.AdminInterviewSessionListItem]{}, fmt.Errorf("scan admin session: %w", err)
+		}
+
+		if overallScore.Valid {
+			score := overallScore.Float64
+			item.OverallScore = &score
+		}
+		if completedAt.Valid {
+			item.CompletedAt = &completedAt.Time
+		}
+		items = append(items, item)
+	}
+
+	return model.PagedResult[model.AdminInterviewSessionListItem]{
+		Items:    items,
+		Total:    total,
+		Page:     query.Page,
+		PageSize: query.PageSize,
+	}, rows.Err()
+}
+
+func (r *InterviewRepository) ListAdminResumes(ctx context.Context, query model.AdminListQuery) (model.PagedResult[model.AdminResumeListItem], error) {
+	whereClause, args := buildAdminResumeFilter(query)
+	total, err := r.countRows(
+		ctx,
+		`SELECT COUNT(*)
+		FROM resumes rs
+		INNER JOIN users u ON u.id = rs.user_id`+whereClause,
+		args...,
+	)
+	if err != nil {
+		return model.PagedResult[model.AdminResumeListItem]{}, fmt.Errorf("count admin resumes: %w", err)
+	}
+
+	offset := (query.Page - 1) * query.PageSize
+	rows, err := r.db.QueryContext(
+		ctx,
+		`SELECT
+			rs.id,
+			rs.user_id,
+			u.email,
+			u.nickname,
+			rs.name,
+			rs.source_type,
+			rs.is_default,
+			rs.updated_at
+		FROM resumes rs
+		INNER JOIN users u ON u.id = rs.user_id`+whereClause+`
+		ORDER BY rs.updated_at DESC
+		LIMIT ? OFFSET ?`,
+		append(args, query.PageSize, offset)...,
+	)
+	if err != nil {
+		return model.PagedResult[model.AdminResumeListItem]{}, fmt.Errorf("list admin resumes: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]model.AdminResumeListItem, 0)
+	for rows.Next() {
+		var (
+			item      model.AdminResumeListItem
+			isDefault int8
+		)
+		if err := rows.Scan(
+			&item.ID,
+			&item.UserID,
+			&item.UserEmail,
+			&item.UserNickname,
+			&item.Name,
+			&item.SourceType,
+			&isDefault,
+			&item.UpdatedAt,
+		); err != nil {
+			return model.PagedResult[model.AdminResumeListItem]{}, fmt.Errorf("scan admin resume: %w", err)
+		}
+		item.IsDefault = isDefault == 1
+		items = append(items, item)
+	}
+
+	return model.PagedResult[model.AdminResumeListItem]{
+		Items:    items,
+		Total:    total,
+		Page:     query.Page,
+		PageSize: query.PageSize,
+	}, rows.Err()
+}
+
+func (r *InterviewRepository) GetAdminResumeDetail(ctx context.Context, resumeID int64) (model.AdminResumeDetail, error) {
+	row := r.db.QueryRowContext(
+		ctx,
+		`SELECT
+			rs.id,
+			u.id,
+			u.email,
+			u.nickname,
+			u.status,
+			rs.name,
+			rs.source_type,
+			COALESCE(rs.file_url, ''),
+			COALESCE(rs.raw_text, ''),
+			COALESCE(CAST(rs.parsed_content AS CHAR), ''),
+			rs.version_no,
+			rs.is_default,
+			rs.created_at,
+			rs.updated_at
+		FROM resumes rs
+		INNER JOIN users u ON u.id = rs.user_id
+		WHERE rs.id = ?
+		LIMIT 1`,
+		resumeID,
+	)
+
+	var (
+		detail        model.AdminResumeDetail
+		user          model.AdminUserSummary
+		parsedContent sql.NullString
+		isDefault     int8
+	)
+	if err := row.Scan(
+		&detail.ID,
+		&user.ID,
+		&user.Email,
+		&user.Nickname,
+		&user.Status,
+		&detail.Name,
+		&detail.SourceType,
+		&detail.FileURL,
+		&detail.RawText,
+		&parsedContent,
+		&detail.VersionNo,
+		&isDefault,
+		&detail.CreatedAt,
+		&detail.UpdatedAt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return model.AdminResumeDetail{}, repository.ErrNotFound
+		}
+		return model.AdminResumeDetail{}, fmt.Errorf("load admin resume detail: %w", err)
+	}
+
+	detail.User = user
+	detail.IsDefault = isDefault == 1
+	detail.ParsedContent = decodeJSONObject(parsedContent.String)
+	return detail, nil
+}
+
+func (r *InterviewRepository) ListAdminAIConfigs(ctx context.Context, query model.AdminListQuery) (model.PagedResult[model.AdminAIConfigListItem], error) {
+	whereClause, args := buildAdminAIConfigFilter(query)
+	total, err := r.countRows(
+		ctx,
+		`SELECT COUNT(*)
+		FROM user_ai_provider_configs cfg
+		INNER JOIN users u ON u.id = cfg.user_id`+whereClause,
+		args...,
+	)
+	if err != nil {
+		return model.PagedResult[model.AdminAIConfigListItem]{}, fmt.Errorf("count admin ai configs: %w", err)
+	}
+
+	offset := (query.Page - 1) * query.PageSize
+	rows, err := r.db.QueryContext(
+		ctx,
+		`SELECT
+			cfg.id,
+			cfg.user_id,
+			u.email,
+			u.nickname,
+			cfg.provider_code,
+			cfg.api_key_masked,
+			cfg.model,
+			cfg.base_url,
+			cfg.is_enabled,
+			cfg.last_test_ok,
+			cfg.last_tested_at,
+			cfg.updated_at
+		FROM user_ai_provider_configs cfg
+		INNER JOIN users u ON u.id = cfg.user_id`+whereClause+`
+		ORDER BY cfg.updated_at DESC
+		LIMIT ? OFFSET ?`,
+		append(args, query.PageSize, offset)...,
+	)
+	if err != nil {
+		return model.PagedResult[model.AdminAIConfigListItem]{}, fmt.Errorf("list admin ai configs: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]model.AdminAIConfigListItem, 0)
+	for rows.Next() {
+		var (
+			item         model.AdminAIConfigListItem
+			isEnabled    int8
+			lastTestOK   int8
+			lastTestedAt sql.NullTime
+		)
+		if err := rows.Scan(
+			&item.ID,
+			&item.UserID,
+			&item.UserEmail,
+			&item.UserNickname,
+			&item.ProviderCode,
+			&item.APIKeyMasked,
+			&item.Model,
+			&item.BaseURL,
+			&isEnabled,
+			&lastTestOK,
+			&lastTestedAt,
+			&item.UpdatedAt,
+		); err != nil {
+			return model.PagedResult[model.AdminAIConfigListItem]{}, fmt.Errorf("scan admin ai config: %w", err)
+		}
+		item.IsEnabled = isEnabled == 1
+		item.LastTestOK = lastTestOK == 1
+		if lastTestedAt.Valid {
+			item.LastTestedAt = &lastTestedAt.Time
+		}
+		items = append(items, item)
+	}
+
+	return model.PagedResult[model.AdminAIConfigListItem]{
+		Items:    items,
+		Total:    total,
+		Page:     query.Page,
+		PageSize: query.PageSize,
+	}, rows.Err()
+}
+
+func (r *InterviewRepository) GetAdminOverview(ctx context.Context) (model.AdminOverview, error) {
+	adminCount, err := r.countRows(ctx, "SELECT COUNT(*) FROM admins")
+	if err != nil {
+		return model.AdminOverview{}, fmt.Errorf("count admins: %w", err)
+	}
+	userCount, err := r.countRows(ctx, "SELECT COUNT(*) FROM users")
+	if err != nil {
+		return model.AdminOverview{}, fmt.Errorf("count users: %w", err)
+	}
+	sessionCount, err := r.countRows(ctx, "SELECT COUNT(*) FROM interview_sessions")
+	if err != nil {
+		return model.AdminOverview{}, fmt.Errorf("count sessions: %w", err)
+	}
+	resumeCount, err := r.countRows(ctx, "SELECT COUNT(*) FROM resumes")
+	if err != nil {
+		return model.AdminOverview{}, fmt.Errorf("count resumes: %w", err)
+	}
+	reportCount, err := r.countRows(ctx, "SELECT COUNT(*) FROM interview_reports")
+	if err != nil {
+		return model.AdminOverview{}, fmt.Errorf("count reports: %w", err)
+	}
+	aiConfigCount, err := r.countRows(ctx, "SELECT COUNT(*) FROM user_ai_provider_configs")
+	if err != nil {
+		return model.AdminOverview{}, fmt.Errorf("count ai configs: %w", err)
+	}
+
+	return model.AdminOverview{
+		AdminCount:    adminCount,
+		UserCount:     userCount,
+		SessionCount:  sessionCount,
+		ResumeCount:   resumeCount,
+		ReportCount:   reportCount,
+		AIConfigCount: aiConfigCount,
+	}, nil
+}
+
 func (r *InterviewRepository) loadSession(ctx context.Context, sessionID int64) (model.InterviewSession, error) {
 	var (
 		session            model.InterviewSession
@@ -1406,4 +1937,153 @@ func defaultString(value string, fallback string) string {
 	}
 
 	return strings.TrimSpace(value)
+}
+
+func (r *InterviewRepository) loadAdmin(ctx context.Context, where string, value any) (model.Admin, error) {
+	row := r.db.QueryRowContext(
+		ctx,
+		fmt.Sprintf(
+			`SELECT id, email, password_hash, nickname, status, created_at, updated_at
+			FROM admins
+			WHERE %s
+			LIMIT 1`,
+			where,
+		),
+		value,
+	)
+
+	var admin model.Admin
+	if err := row.Scan(
+		&admin.ID,
+		&admin.Email,
+		&admin.PasswordHash,
+		&admin.Nickname,
+		&admin.Status,
+		&admin.CreatedAt,
+		&admin.UpdatedAt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return model.Admin{}, repository.ErrNotFound
+		}
+
+		return model.Admin{}, fmt.Errorf("load admin: %w", err)
+	}
+
+	return admin, nil
+}
+
+func (r *InterviewRepository) loadUser(ctx context.Context, where string, value any) (model.User, error) {
+	row := r.db.QueryRowContext(
+		ctx,
+		fmt.Sprintf(
+			`SELECT id, email, password_hash, nickname, avatar_url, status, created_at, updated_at
+			FROM users
+			WHERE %s
+			LIMIT 1`,
+			where,
+		),
+		value,
+	)
+
+	var (
+		user      model.User
+		avatarURL sql.NullString
+	)
+	if err := row.Scan(
+		&user.ID,
+		&user.Email,
+		&user.PasswordHash,
+		&user.Nickname,
+		&avatarURL,
+		&user.Status,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return model.User{}, repository.ErrNotFound
+		}
+
+		return model.User{}, fmt.Errorf("load user: %w", err)
+	}
+
+	if avatarURL.Valid {
+		user.AvatarURL = avatarURL.String
+	}
+
+	return user, nil
+}
+
+func (r *InterviewRepository) countRows(ctx context.Context, query string, args ...any) (int, error) {
+	var total int
+	if err := r.db.QueryRowContext(ctx, query, args...).Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func buildAdminUserFilter(query model.AdminListQuery) (string, []any) {
+	clauses := make([]string, 0)
+	args := make([]any, 0)
+	if query.Keyword != "" {
+		clauses = append(clauses, "(u.email LIKE ? OR u.nickname LIKE ?)")
+		like := "%" + query.Keyword + "%"
+		args = append(args, like, like)
+	}
+	if query.Status != "" {
+		clauses = append(clauses, "u.status = ?")
+		args = append(args, query.Status)
+	}
+	return buildWhereClause(clauses), args
+}
+
+func buildAdminSessionFilter(query model.AdminListQuery) (string, []any) {
+	clauses := make([]string, 0)
+	args := make([]any, 0)
+	if query.Keyword != "" {
+		clauses = append(clauses, "(u.email LIKE ? OR u.nickname LIKE ? OR s.session_name LIKE ? OR s.job_title LIKE ? OR COALESCE(jt.company_name, '') LIKE ?)")
+		like := "%" + query.Keyword + "%"
+		args = append(args, like, like, like, like, like)
+	}
+	if query.Status != "" {
+		clauses = append(clauses, "s.status = ?")
+		args = append(args, query.Status)
+	}
+	return buildWhereClause(clauses), args
+}
+
+func buildAdminResumeFilter(query model.AdminListQuery) (string, []any) {
+	clauses := make([]string, 0)
+	args := make([]any, 0)
+	if query.Keyword != "" {
+		clauses = append(clauses, "(u.email LIKE ? OR u.nickname LIKE ? OR rs.name LIKE ?)")
+		like := "%" + query.Keyword + "%"
+		args = append(args, like, like, like)
+	}
+	return buildWhereClause(clauses), args
+}
+
+func buildAdminAIConfigFilter(query model.AdminListQuery) (string, []any) {
+	clauses := make([]string, 0)
+	args := make([]any, 0)
+	if query.Keyword != "" {
+		clauses = append(clauses, "(u.email LIKE ? OR u.nickname LIKE ? OR cfg.provider_code LIKE ? OR cfg.model LIKE ?)")
+		like := "%" + query.Keyword + "%"
+		args = append(args, like, like, like, like)
+	}
+	if query.Status != "" {
+		switch query.Status {
+		case "active":
+			clauses = append(clauses, "cfg.is_enabled = 1")
+		case "disabled":
+			clauses = append(clauses, "cfg.is_enabled = 0")
+		}
+	}
+	return buildWhereClause(clauses), args
+}
+
+func buildWhereClause(clauses []string) string {
+	if len(clauses) == 0 {
+		return ""
+	}
+	return " WHERE " + strings.Join(clauses, " AND ")
 }

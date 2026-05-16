@@ -4,7 +4,7 @@
       <div class="panel-header">
         <div>
           <h3>模型配置</h3>
-          <p>配置你自己的模型接口，面试出题、评分和复盘会优先使用这里的设置。</p>
+          <p>配置你自己的模型接口，面试出题、评分和复盘会优先使用当前账号下的配置。</p>
         </div>
       </div>
 
@@ -20,10 +20,6 @@
         <article class="config-card">
           <h4>基础信息</h4>
           <div class="field-list">
-            <label class="field">
-              <span>用户 ID</span>
-              <input v-model.number="form.userId" type="number" min="1" />
-            </label>
             <label class="field">
               <span>提供商</span>
               <select v-model="form.provider">
@@ -83,7 +79,6 @@ import { useInterviewState } from "../state/interview";
 const { state, loadAIConfig, saveAIConfig, testAIConfig } = useInterviewState();
 
 const form = reactive({
-  userId: Number(state.config.userId || 1),
   provider: "deepseek",
   apiKey: "",
   model: "deepseek-v4-flash",
@@ -130,7 +125,6 @@ function syncForm(config) {
     return;
   }
 
-  form.userId = Number(config.userId || form.userId);
   form.provider = config.provider || "deepseek";
   form.apiKey = "";
   form.model = config.model || form.model;
@@ -139,13 +133,12 @@ function syncForm(config) {
 }
 
 async function handleLoad() {
-  const config = await loadAIConfig(form.userId);
+  const config = await loadAIConfig();
   syncForm(config);
 }
 
 async function handleTest() {
   const result = await testAIConfig({
-    userId: Number(form.userId),
     provider: form.provider,
     apiKey: form.apiKey,
     model: form.model,
@@ -158,7 +151,6 @@ async function handleTest() {
 
 async function handleSave() {
   const config = await saveAIConfig({
-    userId: Number(form.userId),
     provider: form.provider,
     apiKey: form.apiKey,
     model: form.model,

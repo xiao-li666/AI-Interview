@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/http"
@@ -31,11 +32,30 @@ func (a *App) Run() error {
 	}
 	defer db.Close()
 
+	if err := ensureDatabaseSchema(db); err != nil {
+		return err
+	}
+
 	repo := mysqlrepo.NewInterviewRepository(db)
 	providerFactory := service.NewProviderFactory(a.config)
 	svc := service.NewInterviewService(repo, providerFactory)
+	authService := service.NewAuthService(repo, a.config.Auth)
+	adminService := service.NewAdminService(repo, a.config.Auth)
 	resumeParser := service.NewResumeParser(a.config.Runtime.PythonPath)
-	apiHandler := handler.NewAPIHandler(svc, resumeParser)
+
+	if err := ensureSeedUser(authService); err != nil {
+		return err
+	}
+	if err := adminService.EnsureSeedAdmin(
+		context.Background(),
+		a.config.Admin.SeedEmail,
+		a.config.Admin.SeedPassword,
+		a.config.Admin.SeedNickname,
+	); err != nil {
+		return err
+	}
+
+	apiHandler := handler.NewAPIHandler(svc, authService, adminService, resumeParser)
 
 	server := &http.Server{
 		Addr:              fmt.Sprintf(":%d", a.config.Server.Port),
@@ -45,6 +65,7 @@ func (a *App) Run() error {
 
 	fmt.Printf("api server listening on http://localhost:%d\n", a.config.Server.Port)
 	fmt.Printf("default ai provider: %s\n", providerFactory.Default().Name())
+	fmt.Printf("admin seed account: %s\n", a.config.Admin.SeedEmail)
 	return server.ListenAndServe()
 }
 
@@ -79,4 +100,53 @@ func openMySQL(cfg config.MySQLConfig) (*sql.DB, error) {
 	}
 
 	return db, nil
+}
+
+func ensureDatabaseSchema(db *sql.DB) error {
+	if db == nil {
+		return nil
+	}
+
+	if _, err := db.Exec(`
+		ALTER TABLE users
+		MODIFY COLUMN avatar_url MEDIUMTEXT NULL
+	`); err != nil {
+		return fmt.Errorf("ensure users.avatar_url column: %w", err)
+	}
+
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS admins (
+			id BIGINT PRIMARY KEY AUTO_INCREMENT,
+			email VARCHAR(120) NOT NULL UNIQUE,
+			password_hash VARCHAR(255) NOT NULL,
+			nickname VARCHAR(60) NOT NULL,
+			status VARCHAR(20) NOT NULL DEFAULT 'active',
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+	`); err != nil {
+		return fmt.Errorf("ensure admins table: %w", err)
+	}
+
+	return nil
+}
+
+func ensureSeedUser(authService *service.AuthService) error {
+	if authService == nil {
+		return nil
+	}
+
+	_, err := authService.Register(
+		context.Background(),
+		service.RegisterRequest{
+			Email:    "demo@ai-interview.local",
+			Password: "123456",
+			Nickname: "演示用户",
+		},
+	)
+	if err != nil && err.Error() != "email already exists" {
+		return err
+	}
+
+	return nil
 }

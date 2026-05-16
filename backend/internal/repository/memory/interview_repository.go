@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,12 +13,15 @@ import (
 
 type InterviewRepository struct {
 	mu                sync.RWMutex
+	nextUserID        int64
 	nextPlanID        int64
 	nextSessionID     int64
 	nextQuestionID    int64
 	nextAnswerID      int64
 	nextFeedbackID    int64
 	nextReportID      int64
+	usersByID         map[int64]model.User
+	userIDsByEmail    map[string]int64
 	plans             map[int64]model.InterviewPlan
 	sessions          map[int64]model.InterviewSession
 	questions         map[int64][]model.InterviewQuestion
@@ -30,12 +34,15 @@ type InterviewRepository struct {
 
 func NewInterviewRepository() *InterviewRepository {
 	return &InterviewRepository{
+		nextUserID:        1,
 		nextPlanID:        1,
 		nextSessionID:     1,
 		nextQuestionID:    1,
 		nextAnswerID:      1,
 		nextFeedbackID:    1,
 		nextReportID:      1,
+		usersByID:         make(map[int64]model.User),
+		userIDsByEmail:    make(map[string]int64),
 		plans:             make(map[int64]model.InterviewPlan),
 		sessions:          make(map[int64]model.InterviewSession),
 		questions:         make(map[int64][]model.InterviewQuestion),
@@ -45,6 +52,77 @@ func NewInterviewRepository() *InterviewRepository {
 		historyByUserID:   make(map[int64][]model.HistoryItem),
 		aiConfigsByUserID: make(map[int64]model.UserAIProviderConfig),
 	}
+}
+
+func (r *InterviewRepository) CreateUser(_ context.Context, user model.User) (model.User, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	email := strings.ToLower(strings.TrimSpace(user.Email))
+	if email == "" {
+		return model.User{}, repository.ErrNotFound
+	}
+	if _, exists := r.userIDsByEmail[email]; exists {
+		return model.User{}, repository.ErrNotFound
+	}
+
+	now := time.Now()
+	user.ID = r.nextUserID
+	r.nextUserID++
+	user.Email = email
+	user.CreatedAt = now
+	user.UpdatedAt = now
+
+	r.usersByID[user.ID] = user
+	r.userIDsByEmail[email] = user.ID
+	return user, nil
+}
+
+func (r *InterviewRepository) GetUserByEmail(_ context.Context, email string) (model.User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	userID, ok := r.userIDsByEmail[strings.ToLower(strings.TrimSpace(email))]
+	if !ok {
+		return model.User{}, repository.ErrNotFound
+	}
+
+	user, ok := r.usersByID[userID]
+	if !ok {
+		return model.User{}, repository.ErrNotFound
+	}
+
+	return user, nil
+}
+
+func (r *InterviewRepository) GetUserByID(_ context.Context, userID int64) (model.User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	user, ok := r.usersByID[userID]
+	if !ok {
+		return model.User{}, repository.ErrNotFound
+	}
+
+	return user, nil
+}
+
+func (r *InterviewRepository) UpdateUser(_ context.Context, user model.User) (model.User, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	existing, ok := r.usersByID[user.ID]
+	if !ok {
+		return model.User{}, repository.ErrNotFound
+	}
+
+	existing.Nickname = user.Nickname
+	existing.AvatarURL = user.AvatarURL
+	existing.Status = user.Status
+	existing.UpdatedAt = time.Now()
+
+	r.usersByID[user.ID] = existing
+	return existing, nil
 }
 
 func (r *InterviewRepository) CreatePlan(_ context.Context, plan model.InterviewPlan) (model.InterviewPlan, error) {

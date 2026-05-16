@@ -41,7 +41,6 @@ export const companyOptions = [
 ];
 
 export const setupDefaults = {
-  userId: 1,
   jobTitle: "Go 后端工程师",
   jobCategory: "backend",
   levelCode: "mid",
